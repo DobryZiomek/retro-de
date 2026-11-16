@@ -1,0 +1,55 @@
+Theme modules
+=============
+
+A retro-de theme can be a piece of compiled C code.  A module is one shared
+object, NAME.so, that exports a single symbol:
+
+    #include "retroui.h"
+
+    const RuiThemeModule retro_theme = {
+        RUI_THEME_ABI,
+        { "Name", RUI_STYLE_CLASSIC,          /* or RUI_STYLE_CDE          */
+          { "#c0c0c0", ... 17 colours ... },  /* order below               */
+          "solid",                            /* backdrop pattern          */
+          NULL },                             /* font, NULL = keep         */
+        "Clouds",                             /* wallpaper name/path, NULL */
+        NULL,                                 /* bevel hook, NULL = stock  */
+        "Author", "One line about the theme"
+    };
+
+Colour order: face light shadow dark text disabled field select_bg
+select_fg title_active title_inactive title_fg title_fg_inactive desktop
+desktop_fg alert good.
+
+Because it is code, a module can also draw.  The bevel hook
+
+    static int bevel(struct RuiSurf *s, int x, int y, int w, int h, int style);
+
+is called for every button, field and frame edge (style is RUI_RAISED,
+RUI_SUNKEN, RUI_PRESSED, RUI_RAISED_THIN, RUI_SUNKEN_THIN or RUI_GROOVE).
+Draw it with rui_fill(), rui_line(), rui_bevel_c() ... and return 1, or
+return 0 to get the stock bevel.  Terminal.c and Lilac.c show how.
+
+Getting a module onto the desktop
+---------------------------------
+
+    retro-settings --install-theme Mine.c       compiles it for you
+    retro-settings --install-theme Mine.so      a module somebody built
+    retro-settings --install-theme https://example.org/Mine.so   downloaded
+    retro-settings --apply theme=Mine           or pick it in the Style Manager
+
+By hand:
+
+    cc -shared -fPIC -I/usr/local/include/retro-de -o Mine.so Mine.c
+    cp Mine.so ~/.config/retro-de/themes/
+
+Modules are searched in $RETRO_DE_THEME_PATH (colon separated), then
+~/.config/retro-de/themes, then PREFIX/lib/retro-de/themes.  The file name
+is the theme's name.  A module built for another RUI_THEME_ABI is refused
+with a warning and the previous theme stays.
+
+A module runs inside every retro-de program, with your rights: install
+compiled modules only from people you would run a program from.
+
+Plain palettes need no compiler: a NAME.theme text file in the same
+directory still works (see examples/example.theme).

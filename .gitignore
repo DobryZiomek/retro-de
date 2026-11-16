@@ -1,0 +1,16 @@
+# build output
+*.o
+*.a
+*.so
+/bin/
+/tools/mkwall
+/tests/unit
+/tests/testclient
+/tests/drive
+/tests/out/
+
+# generated at build time
+/config.h
+/wallpapers/*.ppm
+/wallpapers/*.xpm
+/wallpapers/.stamp

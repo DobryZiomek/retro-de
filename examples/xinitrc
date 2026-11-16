@@ -1,0 +1,4 @@
+#!/bin/sh
+# ~/.xinitrc for retro-de: start it with `startx` (or xinit / xenodm).
+[ -f "$HOME/.Xresources" ] && xrdb -merge "$HOME/.Xresources"
+exec retro-session

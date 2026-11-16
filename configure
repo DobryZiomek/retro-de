@@ -1,0 +1,517 @@
+#!/bin/sh
+# retro-de installer menu: pick modules and defaults, write config.h and
+# config.mk, then optionally build and install.
+#
+#   ./configure                  menus (dialog/whiptail if present, else text)
+#   ./configure --text           plain numbered menus (answers may be piped)
+#   ./configure --defaults       no questions: detect everything
+#   options (also skip the matching question):
+#     --prefix=DIR   --audio=pipewire,pulseaudio   --wifi=iwd,wpa
+#     --battery=sysfs   --power=elogind,generic   --dbus=auto|on|off
+#     --xdg-menus=yes|no   --xdg-autostart=yes|no   --theme=CDE
+#     --style=cde|classic|theme   --font=SPEC   --workspaces=N
+#     --terminal=CMD --browser=CMD --filemanager=CMD --editor=CMD
+#     --locker=CMD   --clock=CMD (auto: xclock)   --bluetooth=bluez|none
+#     --build   --install
+#
+# Nothing here is needed at run time; it only edits config.h like you would.
+
+set -u
+cd "$(dirname "$0")" || exit 1
+
+UI=auto
+DEFAULTS=0
+DO_BUILD=0
+DO_INSTALL=0
+PREFIX_SET= AUDIO_SET= WIFI_SET= BATTERY_SET= POWER_SET= DBUS_SET=
+XDGM_SET= XDGA_SET= THEME_SET= STYLE_SET= FONT_SET= WS_SET=
+TERM_SET= BROWSER_SET= FILES_SET= EDITOR_SET= LOCKER_SET= CLOCK_SET= BT_SET=
+
+for arg in "$@"; do
+	val=${arg#*=}
+	case $arg in
+	--text) UI=text ;;
+	--defaults) DEFAULTS=1; UI=none ;;
+	--build) DO_BUILD=1 ;;
+	--install) DO_BUILD=1; DO_INSTALL=1 ;;
+	--prefix=*) PREFIX_SET=$val ;;
+	--audio=*) AUDIO_SET=$(printf '%s' "$val" | tr ',' ' ') ;;
+	--wifi=*) WIFI_SET=$(printf '%s' "$val" | tr ',' ' ') ;;
+	--battery=*) BATTERY_SET=$(printf '%s' "$val" | tr ',' ' ') ;;
+	--power=*) POWER_SET=$(printf '%s' "$val" | tr ',' ' ') ;;
+	--dbus=*) DBUS_SET=$val ;;
+	--xdg-menus=*) XDGM_SET=$val ;;
+	--xdg-autostart=*) XDGA_SET=$val ;;
+	--theme=*) THEME_SET=$val ;;
+	--style=*) STYLE_SET=$val ;;
+	--font=*) FONT_SET=$val ;;
+	--workspaces=*) WS_SET=$val ;;
+	--terminal=*) TERM_SET=$val ;;
+	--browser=*) BROWSER_SET=$val ;;
+	--filemanager=*) FILES_SET=$val ;;
+	--editor=*) EDITOR_SET=$val ;;
+	--locker=*) LOCKER_SET=$val ;;
+	--clock=*) CLOCK_SET=$val ;;
+	--bluetooth=*) BT_SET=$(printf '%s' "$val" | tr ',' ' ') ;;
+	-h|--help) sed -n '2,17p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
+	*) echo "configure: unknown option $arg (see --help)" >&2; exit 2 ;;
+	esac
+done
+
+if [ "$UI" = auto ]; then
+	UI=text
+	if [ -t 0 ] && [ -t 1 ]; then
+		if command -v dialog >/dev/null 2>&1; then UI=dialog
+		elif command -v whiptail >/dev/null 2>&1; then UI=whiptail
+		fi
+	fi
+fi
+
+have() { command -v "$1" >/dev/null 2>&1; }
+in_list() { case " $2 " in *" $1 "*) return 0 ;; esac; return 1; }
+
+# ---------------------------------------------------------------- dialogs
+
+cancelled() { echo; echo "configure: cancelled, nothing written."; exit 1; }
+
+# menu TITLE TEXT DEFAULT tag desc tag desc ...  -> REPLY
+menu() {
+	_t=$1 _x=$2 _d=$3
+	shift 3
+	case $UI in
+	none) REPLY=$_d; return ;;
+	dialog|whiptail)
+		REPLY=$("$UI" --title "$_t" --default-item "$_d" --menu "$_x" 20 74 11 \
+			"$@" 3>&1 1>&2 2>&3) || cancelled
+		return ;;
+	esac
+	echo
+	echo "== $_t"
+	echo "$_x"
+	_i=1
+	while [ $# -gt 0 ]; do
+		_mark=" "
+		[ "$1" = "$_d" ] && _mark="*"
+		printf ' %s %2d) %-16s %s\n' "$_mark" "$_i" "$1" "$2"
+		eval "_tag$_i=\$1"
+		_i=$((_i + 1))
+		shift 2
+	done
+	printf 'Choice [%s]: ' "$_d"
+	read -r _a || _a=
+	REPLY=$_d
+	if [ -n "$_a" ]; then
+		if [ "$_a" -ge 1 ] 2>/dev/null && [ "$_a" -lt "$_i" ]; then
+			eval "REPLY=\$_tag$_a"
+		else
+			REPLY=$_a                      # a tag typed directly
+		fi
+	fi
+}
+
+# checklist TITLE TEXT tag desc on|off ...  -> REPLY (space separated)
+checklist() {
+	_t=$1 _x=$2
+	shift 2
+	_def= _k=0 _tag=
+	for _a in "$@"; do
+		case $((_k % 3)) in
+		0) _tag=$_a ;;
+		2) [ "$_a" = on ] && _def="$_def $_tag" ;;
+		esac
+		_k=$((_k + 1))
+	done
+	_def=${_def# }
+	case $UI in
+	none) REPLY=$_def; return ;;
+	dialog|whiptail)
+		REPLY=$("$UI" --title "$_t" --checklist "$_x" 20 74 11 "$@" \
+			3>&1 1>&2 2>&3) || cancelled
+		REPLY=$(printf '%s' "$REPLY" | tr -d '"')
+		return ;;
+	esac
+	echo
+	echo "== $_t"
+	echo "$_x"
+	_i=1 _k=0
+	for _a in "$@"; do
+		case $((_k % 3)) in
+		0) _tag=$_a ;;
+		1) _desc=$_a ;;
+		2)
+			_mark=" "
+			[ "$_a" = on ] && _mark="x"
+			printf ' [%s] %2d) %-14s %s\n' "$_mark" "$_i" "$_tag" "$_desc"
+			eval "_tag$_i=\$_tag"
+			_i=$((_i + 1)) ;;
+		esac
+		_k=$((_k + 1))
+	done
+	printf 'Numbers in order, e.g. "2 1" [%s]: ' "$_def"
+	read -r _a || _a=
+	REPLY=$_def
+	if [ -n "$_a" ]; then
+		REPLY=
+		for _n in $(printf '%s' "$_a" | tr ',' ' '); do
+			if [ "$_n" -ge 1 ] 2>/dev/null && [ "$_n" -lt "$_i" ]; then
+				eval "REPLY=\"\$REPLY \$_tag$_n\""
+			fi
+		done
+		REPLY=${REPLY# }
+	fi
+}
+
+# input TITLE TEXT DEFAULT -> REPLY
+input() {
+	case $UI in
+	none) REPLY=$3; return ;;
+	dialog|whiptail)
+		REPLY=$("$UI" --title "$1" --inputbox "$2" 10 74 "$3" \
+			3>&1 1>&2 2>&3) || cancelled
+		return ;;
+	esac
+	echo
+	echo "== $1"
+	printf '%s [%s]: ' "$2" "$3"
+	read -r REPLY || REPLY=
+	[ -n "$REPLY" ] || REPLY=$3
+}
+
+# yesno TITLE TEXT DEFAULT(yes|no) -> status
+yesno() {
+	case $UI in
+	none) [ "$3" = yes ]; return ;;
+	dialog|whiptail)
+		if [ "$3" = no ]; then
+			"$UI" --title "$1" --defaultno --yesno "$2" 10 74; return
+		fi
+		"$UI" --title "$1" --yesno "$2" 10 74; return ;;
+	esac
+	printf '%s (yes/no) [%s]: ' "$2" "$3"
+	read -r _a || _a=
+	[ -n "$_a" ] || _a=$3
+	case $_a in y|Y|yes|YES) return 0 ;; esac
+	return 1
+}
+
+found() { if have "$1"; then echo "found: $1"; else echo "$1 not installed"; fi; }
+
+# -------------------------------------------------------------- detection
+
+OS=$(uname -s)
+echo "retro-de configuration for $OS"
+
+AUDIO_ALL="sndio pipewire pulseaudio alsa oss mixerctl"
+audio_prog() {
+	case $1 in sndio) echo sndioctl ;; pipewire) echo wpctl ;;
+	pulseaudio) echo pactl ;; alsa) echo amixer ;; oss) echo mixer ;;
+	mixerctl) echo mixerctl ;; esac
+}
+audio_desc() {
+	case $1 in sndio) echo "sndio (OpenBSD)" ;; pipewire) echo "PipeWire" ;;
+	pulseaudio) echo "PulseAudio" ;; alsa) echo "ALSA" ;;
+	oss) echo "FreeBSD mixer" ;; mixerctl) echo "NetBSD mixerctl" ;; esac
+}
+audio_def=
+for m in $AUDIO_ALL; do
+	[ "$m" = oss ] && [ "$OS" != FreeBSD ] && continue   # Linux has no mixer(8)
+	have "$(audio_prog "$m")" && audio_def="$audio_def $m"
+done
+if [ -z "$audio_def" ]; then
+	case $OS in
+	OpenBSD) audio_def=sndio ;; FreeBSD) audio_def=oss ;;
+	NetBSD) audio_def=mixerctl ;; *) audio_def="pipewire pulseaudio alsa" ;;
+	esac
+fi
+
+WIFI_ALL="iwd ifconfig wpa"
+wifi_def=
+have iwctl && wifi_def="$wifi_def iwd"
+[ "$OS" = OpenBSD ] && wifi_def="$wifi_def ifconfig"
+have wpa_cli && wifi_def="$wifi_def wpa"
+if [ -z "$wifi_def" ]; then
+	case $OS in OpenBSD) wifi_def=ifconfig ;; Linux) wifi_def="iwd wpa" ;;
+	*) wifi_def=wpa ;; esac
+fi
+
+BT_ALL="bluez"
+bt_def=
+{ have bluetoothctl || [ "$OS" = Linux ]; } && bt_def=bluez
+
+BATTERY_ALL="sysfs acpi apm"
+case $OS in
+Linux) battery_def=sysfs ;; FreeBSD|DragonFly) battery_def=acpi ;;
+*) battery_def=apm ;;
+esac
+
+POWER_ALL="systemd elogind consolekit openbsd freebsd netbsd generic"
+if [ -d /run/systemd/system ]; then init=systemd
+elif [ -e /run/elogind.pid ] || { have loginctl && [ -d /run/systemd/seats ]; }
+then init=elogind
+elif [ -d /run/ConsoleKit ] || [ -d /var/run/ConsoleKit ]; then init=consolekit
+else
+	case $OS in OpenBSD) init=openbsd ;; FreeBSD|DragonFly) init=freebsd ;;
+	NetBSD) init=netbsd ;; *) init=generic ;; esac
+fi
+power_def=$init
+[ "$init" = elogind ] || [ "$init" = consolekit ] && power_def="$init generic"
+pid1=$(ps -p 1 -o comm= 2>/dev/null || echo unknown)
+
+# ---------------------------------------------------------------- questions
+
+if [ -n "$AUDIO_SET" ]; then AUDIO=$AUDIO_SET; else
+	set --
+	for m in $AUDIO_ALL; do
+		st=off
+		in_list "$m" "$audio_def" && st=on
+		set -- "$@" "$m" "$(audio_desc "$m") - $(found "$(audio_prog "$m")")" "$st"
+	done
+	checklist "Audio" "Volume control modules, probed in this order at run time:" "$@"
+	AUDIO=$REPLY
+fi
+
+if [ -n "$WIFI_SET" ]; then WIFI=$WIFI_SET; else
+	set -- \
+		iwd "Linux iwd - $(found iwctl)" "$(in_list iwd "$wifi_def" && echo on || echo off)" \
+		ifconfig "OpenBSD ifconfig join/scan" "$(in_list ifconfig "$wifi_def" && echo on || echo off)" \
+		wpa "wpa_supplicant - $(found wpa_cli)" "$(in_list wpa "$wifi_def" && echo on || echo off)"
+	checklist "Wi-Fi" "Wi-Fi tools for the panel and the Network dialog:" "$@"
+	WIFI=$REPLY
+fi
+
+if [ -n "$BT_SET" ]; then
+	BT=$BT_SET
+	[ "$BT" = none ] && BT=
+else
+	set -- \
+		bluez "BlueZ - $(found bluetoothctl)" "$(in_list bluez "$bt_def" && echo on || echo off)"
+	checklist "Bluetooth" "Bluetooth for the panel and the Bluetooth dialog:" "$@"
+	BT=$REPLY
+fi
+
+if [ -n "$BATTERY_SET" ]; then BATTERY=$BATTERY_SET; else
+	set -- \
+		sysfs "Linux /sys/class/power_supply" "$(in_list sysfs "$battery_def" && echo on || echo off)" \
+		acpi "FreeBSD hw.acpi.battery" "$(in_list acpi "$battery_def" && echo on || echo off)" \
+		apm "OpenBSD/NetBSD apm(8)" "$(in_list apm "$battery_def" && echo on || echo off)"
+	checklist "Battery" "Battery status:" "$@"
+	BATTERY=$REPLY
+fi
+
+if [ -n "$POWER_SET" ]; then POWER=$POWER_SET; else
+	set --
+	for m in $POWER_ALL; do
+		case $m in
+		systemd) d="systemd (systemctl)" ;; elogind) d="elogind (loginctl)" ;;
+		consolekit) d="ConsoleKit2 over D-Bus" ;; openbsd) d="OpenBSD shutdown/zzz" ;;
+		freebsd) d="FreeBSD shutdown/acpiconf" ;; netbsd) d="NetBSD shutdown/sysctl" ;;
+		generic) d="sysvinit/runit/s6/OpenRC/dinit" ;;
+		esac
+		[ "$m" = "$init" ] && d="$d  <- detected"
+		st=off
+		in_list "$m" "$power_def" && st=on
+		set -- "$@" "$m" "$d" "$st"
+	done
+	checklist "Power / init" "Shut down, reboot and suspend through (PID 1 is $pid1):" "$@"
+	POWER=$REPLY
+fi
+
+if [ -n "$DBUS_SET" ]; then DBUS=$DBUS_SET; else
+	menu "D-Bus" "Session bus handling ($(found dbus-daemon)):" auto \
+		auto "start one only if none is running and dbus-daemon exists" \
+		on "always start one (warn if dbus-daemon is missing)" \
+		off "never touch D-Bus"
+	DBUS=$REPLY
+fi
+
+if [ -n "$XDGM_SET" ]; then XDGM=$XDGM_SET; else
+	if yesno "XDG" "Read .desktop files for the Applications menu and @app?" yes
+	then XDGM=yes; else XDGM=no; fi
+fi
+if [ -n "$XDGA_SET" ]; then XDGA=$XDGA_SET; else
+	if yesno "XDG" "Start ~/.config/autostart/*.desktop entries at login?" no
+	then XDGA=yes; else XDGA=no; fi
+fi
+
+THEMES="CDE Classic Broica Solaris Olive Crimson Motif Platinum HighContrast"
+if [ -n "$THEME_SET" ]; then THEME=$THEME_SET; else
+	set --
+	for t in $THEMES; do
+		case $t in
+		CDE) d="CDE default: blue-grey, rose title" ;; Classic) d="Windows 95 grey, teal" ;;
+		Broica) d="CDE Broica: warm beige" ;; Solaris) d="Solaris CDE: periwinkle" ;;
+		Olive) d="CDE Olive" ;; Crimson) d="CDE Crimson" ;; Motif) d="plain Motif grey" ;;
+		Platinum) d="Mac OS 8 platinum" ;; HighContrast) d="black and white" ;;
+		esac
+		set -- "$@" "$t" "$d"
+	done
+	menu "Theme" "Colour theme (the Style Manager can change it later):" CDE "$@"
+	THEME=$REPLY
+fi
+
+if [ -n "$STYLE_SET" ]; then STYLE=$STYLE_SET; else
+	menu "Style" "Look and feel:" theme \
+		theme "whatever the theme says" \
+		cde "CDE: front panel, Motif frames, desktop icons" \
+		classic "Classic: taskbar, Win95-style frames"
+	STYLE=$REPLY
+fi
+[ "$STYLE" = theme ] && STYLE=
+
+if [ -n "$FONT_SET" ]; then FONT=$FONT_SET; else
+	menu "Font" "Interface font (Xft pattern, or core:<XLFD>):" sans-9 \
+		sans-9 "default" sans-10 "larger" sans-11 "large" serif-10 "serif" \
+		monospace-9 "monospace" "DejaVu Sans-9" "DejaVu Sans" \
+		"core:-*-helvetica-medium-r-normal--12-*" "bitmap Helvetica (core X)" \
+		other "type one"
+	FONT=$REPLY
+	[ "$FONT" = other ] && { input "Font" "Font" "sans-9"; FONT=$REPLY; }
+fi
+
+# tool TITLE VAR-SET CANDIDATES... -> REPLY
+tool() {
+	_title=$1 _set=$2
+	shift 2
+	if [ -n "$_set" ]; then REPLY=$_set; return; fi
+	_c=$*
+	set -- auto "XDG default or the first installed"
+	for p in $_c; do have "$p" && set -- "$@" "$p" "installed"; done
+	set -- "$@" other "type a command"
+	menu "$_title" "Default $_title:" auto "$@"
+	[ "$REPLY" = other ] && { input "$_title" "Command" ""; }
+	[ -n "$REPLY" ] || REPLY=auto
+}
+tool "terminal" "$TERM_SET" xterm urxvt st alacritty kitty foot \
+	xfce4-terminal lxterminal mate-terminal konsole gnome-terminal
+TERMINAL_C=$REPLY
+tool "browser" "$BROWSER_SET" firefox chromium librewolf falkon epiphany \
+	qutebrowser dillo netsurf-gtk
+BROWSER_C=$REPLY
+tool "file manager" "$FILES_SET" pcmanfm thunar caja nemo nautilus dolphin \
+	spacefm xfe
+FILES_C=$REPLY
+tool "text editor" "$EDITOR_SET" mousepad pluma gedit featherpad kate \
+	leafpad geany nedit xedit
+EDITOR_C=$REPLY
+tool "screen locker" "$LOCKER_SET" xsecurelock slock i3lock xlock \
+	xscreensaver-command light-locker-command
+LOCKER_C=$REPLY
+[ "$LOCKER_C" = xscreensaver-command ] && LOCKER_C="xscreensaver-command -lock"
+[ "$LOCKER_C" = light-locker-command ] && LOCKER_C="light-locker-command -l"
+tool "clock" "$CLOCK_SET" xclock oclock dclock xdaliclock
+CLOCK_C=$REPLY
+
+if [ -n "$WS_SET" ]; then WS=$WS_SET; else
+	input "Workspaces" "Number of workspaces (1-32)" 4
+	WS=$REPLY
+fi
+case $WS in ''|*[!0-9]*) WS=4 ;; esac
+[ "$WS" -ge 1 ] && [ "$WS" -le 32 ] || WS=4
+
+cur_prefix=$(sed -n 's/^PREFIX *= *//p' config.mk)
+if [ -n "$PREFIX_SET" ]; then PREFIX=$PREFIX_SET; else
+	input "Prefix" "Install prefix" "${cur_prefix:-/usr/local}"
+	PREFIX=$REPLY
+fi
+
+# --------------------------------------------------------------- validation
+
+check_tags() {      # check_tags KIND "CHOSEN" "ALLOWED"
+	for t in $2; do
+		in_list "$t" "$3" || { echo "configure: unknown $1 module '$t'" >&2; exit 2; }
+	done
+}
+check_tags audio "$AUDIO" "$AUDIO_ALL"
+check_tags wifi "$WIFI" "$WIFI_ALL"
+check_tags battery "$BATTERY" "$BATTERY_ALL"
+check_tags bluetooth "$BT" "$BT_ALL"
+check_tags power "$POWER" "$POWER_ALL"
+case $DBUS in auto|on|off) ;; *) echo "configure: --dbus must be auto, on or off" >&2; exit 2 ;; esac
+case $STYLE in ''|cde|classic) ;; *) echo "configure: --style must be cde, classic or theme" >&2; exit 2 ;; esac
+yn() { case $1 in y|Y|yes|1|on|true) echo 1 ;; *) echo 0 ;; esac; }
+
+# ------------------------------------------------------------------ writing
+
+modlist() {          # modlist PREFIX "a b c" -> "&rui_PREFIX_a, &rui_PREFIX_b,"
+	_o=
+	for m in $2; do _o="$_o&rui_$1_$m, "; done
+	printf '%s' "${_o% }"
+}
+cstr() {             # C string literal contents
+	printf '%s' "$1" | sed 's/\\/\\\\/g; s/"/\\"/g'
+}
+sedrep() {           # escape for the right-hand side of s|...|...|
+	printf '%s' "$1" | sed 's/[\\&|]/\\&/g'
+}
+setdef() {           # setdef NAME VALUE (the whole #define line is replaced)
+	SED_SCRIPT="$SED_SCRIPT
+s|^#define $1 .*|#define $1 $(sedrep "$2")|"
+}
+
+SED_SCRIPT=
+setdef AUDIO_MODULES "$(modlist audio "$AUDIO")"
+setdef NET_MODULES "$(modlist net "$WIFI")"
+setdef BATTERY_MODULES "$(modlist battery "$BATTERY")"
+setdef BT_MODULES "$(modlist bt "$BT")"
+setdef POWER_MODULES "$(modlist power "$POWER")"
+setdef DBUS_MODE "\"$DBUS\""
+setdef DESKTOP_ENTRIES "$(yn "$XDGM")"
+setdef XDG_AUTOSTART "$(yn "$XDGA")"
+setdef DEFAULT_THEME "\"$(cstr "$THEME")\""
+setdef DEFAULT_STYLE "\"$STYLE\""
+setdef DEFAULT_FONT "\"$(cstr "$FONT")\""
+setdef DEFAULT_TERMINAL "\"$(cstr "$TERMINAL_C")\""
+setdef DEFAULT_BROWSER "\"$(cstr "$BROWSER_C")\""
+setdef DEFAULT_FILEMANAGER "\"$(cstr "$FILES_C")\""
+setdef DEFAULT_EDITOR "\"$(cstr "$EDITOR_C")\""
+setdef DEFAULT_LOCKER "\"$(cstr "$LOCKER_C")\""
+setdef DEFAULT_CLOCK "\"$(cstr "$CLOCK_C")\""
+setdef WORKSPACES "$WS"
+
+[ -f config.h ] && cp config.h config.h.bak
+sed "$SED_SCRIPT" config.def.h > config.h.tmp && mv config.h.tmp config.h ||
+	{ echo "configure: cannot write config.h" >&2; exit 1; }
+sed "s|^PREFIX *=.*|PREFIX  = $(sedrep "$PREFIX")|" config.mk > config.mk.tmp &&
+	mv config.mk.tmp config.mk || { echo "configure: cannot write config.mk" >&2; exit 1; }
+
+cat <<EOF
+
+retro-de configured:
+  audio        ${AUDIO:-(none)}
+  wi-fi        ${WIFI:-(none)}
+  battery      ${BATTERY:-(none)}
+  bluetooth    ${BT:-(none)}
+  power/init   ${POWER:-(none)}
+  D-Bus        $DBUS
+  XDG          menus $(yn "$XDGM"), autostart $(yn "$XDGA")
+  look         theme $THEME, style ${STYLE:-from theme}, font $FONT
+  tools        terminal $TERMINAL_C, browser $BROWSER_C
+               file manager $FILES_C, editor $EDITOR_C, locker $LOCKER_C
+               clock $CLOCK_C
+  workspaces   $WS
+  prefix       $PREFIX
+Wrote config.h$([ -f config.h.bak ] && echo " (old one in config.h.bak)") and config.mk.
+EOF
+
+if [ $DO_BUILD -eq 0 ] && [ "$UI" != none ] &&
+    yesno "Build" "Build retro-de now (make)?" yes; then
+	DO_BUILD=1
+fi
+[ $DO_BUILD -eq 1 ] || { echo "Next: make && make install"; exit 0; }
+make || exit 1
+if [ $DO_INSTALL -eq 0 ] && [ "$UI" != none ] &&
+    yesno "Install" "Install into $PREFIX (make install)?" no; then
+	DO_INSTALL=1
+fi
+[ $DO_INSTALL -eq 1 ] || { echo "Next: make install"; exit 0; }
+if [ -w "$PREFIX" ] || { [ ! -e "$PREFIX" ] && [ -w "$(dirname "$PREFIX")" ]; }; then
+	make install
+elif have doas; then
+	doas make install
+elif have sudo; then
+	sudo make install
+else
+	echo "configure: $PREFIX is not writable; run make install as root" >&2
+	exit 1
+fi
+echo "Installed. Add 'exec retro-session' to ~/.xinitrc or pick Retro in your display manager."

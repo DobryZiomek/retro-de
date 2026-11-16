@@ -1,0 +1,17 @@
+# ~/.config/retro-de/themes/Example.theme - a user theme.  Pick it in the
+# Style Manager (Color) or with `theme = Example` in retro.conf.
+# A theme can also be compiled C code that draws its own bevels: see
+# themes/README and `retro-settings --install-theme`.
+style = cde
+pattern = dots
+color.face = #a3b5a3
+color.light = #dbe5db
+color.shadow = #556b55
+color.dark = #223022
+color.field = #c4d2c4
+color.select_bg = #869c86
+color.title_active = #3f6f5f
+color.title_inactive = #a3b5a3
+color.title_fg = #ffffff
+color.title_fg_inactive = #000000
+color.desktop = #4f6a5f

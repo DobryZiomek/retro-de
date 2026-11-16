@@ -1,0 +1,7 @@
+[Desktop Entry]
+Type=XSession
+Name=Retro
+Comment=retro-de, a small CDE-style desktop
+Exec=@BINDIR@/retro-session
+TryExec=@BINDIR@/retro-session
+DesktopNames=Retro
