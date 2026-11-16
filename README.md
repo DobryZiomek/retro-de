@@ -82,7 +82,7 @@ DISPLAY=:2 PATH="$PWD/bin:$PATH" RETRO_DE_DATA_DIR="$PWD" retro-session
 - [Monitors](#monitors) · [Moving windows](#moving-windows) · [Do not disturb, screen saver](#do-not-disturb-keeping-the-screen-on-the-screen-saver)
 - [Configuration by hand](#configuration-by-hand) · [File explorer and calculator](#file-explorer-and-calculator) · [Bluetooth](#bluetooth)
 - [CDE front panel](#the-cde-front-panel-and-windows) · [Style Manager](#style-manager) · [Keys and mouse](#keys-and-mouse) · [Configuration files](#configuration-files)
-- [OS notes](#os-notes) · [Testing](#testing) · [Contributing](#contributing) · [Limits](#limits)
+- [OS notes](#os-notes) · [Testing](#testing) · [Contributing](#contributing) · [License](#license) · [Contact](#contact) · [Limits](#limits)
 
 ## The programs
 
@@ -600,6 +600,14 @@ same script.
 ## Contributing
 
 See [CONTRIBUTING.md](CONTRIBUTING.md) and [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).
+
+## License
+
+MIT, see [LICENSE](LICENSE).
+
+## Contact
+
+Questions or ideas? Open an issue, or find me on Discord: **cia_fed**.
 
 
 
