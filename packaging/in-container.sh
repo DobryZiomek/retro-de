@@ -34,7 +34,8 @@ arch)
 	chown -R b /home/b/p
 	su b -c "cd /home/b/p && MAKEFLAGS=-j$J PKGEXT=.pkg.tar.zst \
 	    makepkg --noconfirm --skipchecksums"
-	cp /home/b/p/retro-de-$V-*.pkg.tar.zst /out/
+	cp /home/b/p/retro-de-$V-*.pkg.tar.zst \
+	    /home/b/p/retro-de-dbus-$V-*.pkg.tar.zst /out/
 	;;
 apk)
 	apk add -q alpine-sdk libx11-dev libxft-dev libxinerama-dev \

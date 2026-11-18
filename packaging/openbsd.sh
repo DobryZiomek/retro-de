@@ -21,3 +21,19 @@ pkg_create -A "$(uname -m)" \
     -D MAINTAINER="DobryZiomek <https://github.com/DobryZiomek/retro-de>" \
     -D FULLPKGPATH=x11/retro-de -D FULLPKGNAME="retro-de-$V" \
     -d desc -f plist -B "$S" -p /usr/local "../retro-de-$V.tgz"
+
+# the optional package: retro-dbus
+S2=$PWD/stage-dbus
+rm -rf "$S2"
+make install-dbus PREFIX=/usr/local DESTDIR="$S2"
+strip "$S2"/usr/local/bin/*
+echo "D-Bus session bus stand-in for retro-de: programs that need a" > desc2
+echo "session bus work without dbus; notifications and portals go to" >> desc2
+echo "retro-de.  https://github.com/DobryZiomek/retro-de" >> desc2
+(cd "$S2/usr/local" && find . ! -type d | sort | sed 's|^\./||') > plist2
+pkg_create -A "$(uname -m)" \
+    -D COMMENT="D-Bus session bus stand-in for retro-de" \
+    -D MAINTAINER="DobryZiomek <https://github.com/DobryZiomek/retro-de>" \
+    -D FULLPKGPATH=x11/retro-de,-dbus -D FULLPKGNAME="retro-de-dbus-$V" \
+    -P "x11/retro-de:retro-de-$V:retro-de-$V" \
+    -d desc2 -f plist2 -B "$S2" -p /usr/local "../retro-de-dbus-$V.tgz"

@@ -3,6 +3,7 @@
 #define RETRO_BAR_H
 
 #include "../lib/retroui.h"
+#include "../desk/image.h"
 
 #define MAX_ICONS 32
 #define CPU_HIST 36
@@ -11,7 +12,7 @@
 #define MAX_BLOCKS 16
 
 enum { AP_CPU, AP_MEM, AP_BAT, AP_NET, AP_VOL, AP_CLOCK, AP_BT, AP_DND,
-       AP_AWAKE, AP_BLOCK };
+       AP_AWAKE, AP_NOTES, AP_BLOCK };
 extern const char *const applet_names[];
 #define NBUILTIN ((int)(sizeof applet_names / sizeof applet_names[0]))
 
@@ -22,7 +23,10 @@ typedef struct Task {
 	int hidden, skip, urgent;
 	RuiRect r;
 	int shown;
+	Image *icon;                       /* TASK_ICON square, or NULL      */
 } Task;
+
+#define TASK_ICON 16
 
 typedef struct Applet {
 	int kind, block;
@@ -116,6 +120,14 @@ void vol_close(void);
 void menu_refresh(void);
 void tray_layout(void);
 void switch_desk_rel(int d);
+
+/* notify.c: notification popups and the launcher on retro-bus */
+void notify_init(void);
+int  notify_event(XEvent *ev);         /* 1 when it was for a popup */
+void notify_tick(long long now);
+void notify_shutdown(void);
+int  notify_unread(void);
+void notify_center_toggle(int anchor_x);
 
 /* frontpanel.c */
 void fp_setup(void);

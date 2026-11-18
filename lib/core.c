@@ -952,12 +952,17 @@ rui_wait(RuiApp *app, int timeout_ms)
 {
 	fd_set rfds;
 	struct timeval tv, *tvp = NULL;
-	int xfd = ConnectionNumber(app->dpy), maxfd = xfd, i, r;
+	int xfd = ConnectionNumber(app->dpy), maxfd = xfd, i, r, bfd;
 
 	if (XPending(app->dpy) || quit_flag)
 		return;
 	FD_ZERO(&rfds);
 	FD_SET(xfd, &rfds);
+	if ((bfd = rui_bus_wait_fd(&timeout_ms)) >= 0) {
+		FD_SET(bfd, &rfds);
+		if (bfd > maxfd)
+			maxfd = bfd;
+	}
 	if (sig_pipe[0] >= 0) {
 		FD_SET(sig_pipe[0], &rfds);
 		if (sig_pipe[0] > maxfd)
@@ -987,6 +992,8 @@ rui_wait(RuiApp *app, int timeout_ms)
 	for (i = 0; i < MAX_JOBS; i++)
 		if (jobs[i].pid && FD_ISSET(jobs[i].fd, &rfds))
 			job_read(&jobs[i]);
+	if (bfd >= 0 && bfd == rui_bus_fd() && FD_ISSET(bfd, &rfds))
+		rui_bus_dispatch();
 }
 
 void

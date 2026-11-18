@@ -19,7 +19,7 @@ Bar bar;
 
 const char *const applet_names[] = {
 	"cpu", "mem", "battery", "net", "volume", "clock", "bluetooth", "dnd",
-	"awake"
+	"awake", "notes"
 };
 
 static void handle_event(XEvent *ev);
@@ -60,6 +60,63 @@ task_read(Task *t)
 	free(v);
 }
 
+/* the window's own icon (_NET_WM_ICON), blended onto the button face;
+ * else the one learned for its class; also learns it for the Programs
+ * window and the desktop */
+static void
+task_icon(Task *t)
+{
+	unsigned char *rgba;
+	XColor face;
+
+	image_free(t->icon);
+	t->icon = NULL;
+	if ((rgba = rui_netwm_icon(bar.app, t->win, TASK_ICON))) {
+		Image *img = rui_calloc(1, sizeof *img);
+		int i, n = TASK_ICON * TASK_ICON;
+
+		face.pixel = bar.app->color[RUI_C_FACE].pixel;
+		face.red = bar.app->color[RUI_C_FACE].color.red;
+		face.green = bar.app->color[RUI_C_FACE].color.green;
+		face.blue = bar.app->color[RUI_C_FACE].color.blue;
+		img->w = img->h = TASK_ICON;
+		img->rgb = rui_malloc((size_t)n * 3);
+		img->alpha = rui_malloc((size_t)n);
+		for (i = 0; i < n; i++) {
+			const unsigned char *p = rgba + i * 4;
+			unsigned a = p[3];
+
+			img->rgb[i * 3] = (unsigned char)((p[0] * a +
+			    (face.red >> 8) * (255 - a)) / 255);
+			img->rgb[i * 3 + 1] = (unsigned char)((p[1] * a +
+			    (face.green >> 8) * (255 - a)) / 255);
+			img->rgb[i * 3 + 2] = (unsigned char)((p[2] * a +
+			    (face.blue >> 8) * (255 - a)) / 255);
+			img->alpha[i] = a >= 40 ? 255 : 0;
+		}
+		free(rgba);
+		t->icon = img;
+		rui_icon_learn(bar.app, t->win);
+	} else {
+		XClassHint ch;
+		char *path = NULL;
+
+		memset(&ch, 0, sizeof ch);
+		if (XGetClassHint(bar.dpy, t->win, &ch)) {
+			path = rui_icon_find(ch.res_name);
+			if (!path)
+				path = rui_icon_find(ch.res_class);
+			if (ch.res_name)
+				XFree(ch.res_name);
+			if (ch.res_class)
+				XFree(ch.res_class);
+		}
+		if (path)
+			t->icon = image_load_size(bar.app, path, TASK_ICON);
+		free(path);
+	}
+}
+
 static Task *
 task_find(Window w)
 {
@@ -88,16 +145,20 @@ tasks_refresh(void)
 		if (old) {
 			nt[k] = *old;
 			old->title = NULL;
+			old->icon = NULL;
 			old->win = None;
 		} else {
 			nt[k].win = list[i];
 			XSelectInput(bar.dpy, list[i], PropertyChangeMask);
 			task_read(&nt[k]);
+			task_icon(&nt[k]);
 		}
 		k++;
 	}
-	for (i = 0; i < bar.ntasks; i++)
+	for (i = 0; i < bar.ntasks; i++) {
 		free(bar.tasks[i].title);
+		image_free(bar.tasks[i].icon);
+	}
 	free(bar.tasks);
 	free(list);
 	bar.tasks = nt;
@@ -614,6 +675,12 @@ ap_text(const Applet *a, char *buf, size_t n)
 	case AP_AWAKE:                         /* keep the screen on */
 		snprintf(buf, n, "Awake");
 		break;
+	case AP_NOTES:                         /* the notification list */
+		if (notify_unread())
+			snprintf(buf, n, "Msg %d", notify_unread());
+		else
+			snprintf(buf, n, "Msg");
+		break;
 	case AP_BLOCK:
 		snprintf(buf, n, "%s", bar.blocks[a->block].text);
 		break;
@@ -881,6 +948,12 @@ draw(void)
 		r.x += 6 + (act ? 1 : 0);
 		r.y += act ? 1 : 0;
 		r.w -= 12;
+		if (t->icon && r.w > TASK_ICON + 24) {
+			image_draw(a, t->icon, s->buf, r.x - 2,
+			    r.y + (r.h - t->icon->h) / 2);
+			r.x += TASK_ICON + 2;
+			r.w -= TASK_ICON + 2;
+		}
 		if (t->hidden)
 			snprintf(buf, sizeof buf, "[%.120s]", t->title);
 		else
@@ -1271,6 +1344,9 @@ applet_click(Applet *ap, XButtonEvent *e)
 		if (e->button == Button1)
 			rui_wm_command(bar.app, "awake");
 		break;
+	case AP_NOTES:
+		notify_center_toggle(e->x_root);
+		break;
 	case AP_BT:
 		if (e->button == Button1) {
 			rui_spawn("retro-bt");
@@ -1447,6 +1523,8 @@ handle_event(XEvent *ev)
 {
 	Task *t;
 
+	if (notify_event(ev))
+		return;
 	if (rui_monitors_event(bar.app, ev)) {
 		cal_close();                       /* monitors were rearranged */
 		vol_close();
@@ -1504,6 +1582,9 @@ handle_event(XEvent *ev)
 			    a == A(_NET_WM_STATE) || a == A(_NET_WM_DESKTOP) ||
 			    a == A(_NET_WM_WINDOW_TYPE)) {
 				task_read(t);
+				bar.dirty = 1;
+			} else if (a == A(_NET_WM_ICON)) {
+				task_icon(t);
 				bar.dirty = 1;
 			}
 		}
@@ -1706,10 +1787,12 @@ main(int argc, char **argv)
 	rui_signals_init();
 	bar.app = rui_open("retro-bar");
 	setup();
+	notify_init();
 #ifdef __OpenBSD__
 	/* wpath cpath: the programs folder is created on first use;
 	 * route: getifaddrs(3) for the network applet's link state */
-	if (pledge("stdio rpath wpath cpath proc exec vminfo route", NULL) == -1)
+	if (pledge("stdio rpath wpath cpath proc exec vminfo route unix", NULL)
+	    == -1)
 		rui_die("pledge failed");
 #endif
 	bar.running = 1;
@@ -1749,6 +1832,7 @@ main(int argc, char **argv)
 		poll_blocks(now);
 		if (bar.fp && fp_busy())
 			bar.dirty = 1;                     /* blink the busy light */
+		notify_tick(now);
 		if (bar.dirty)
 			draw();
 		if (bar.running)
@@ -1757,8 +1841,11 @@ main(int argc, char **argv)
 	cal_close();
 	vol_close();
 	tray_shutdown();
-	for (i = 0; i < bar.ntasks; i++)
+	notify_shutdown();
+	for (i = 0; i < bar.ntasks; i++) {
 		free(bar.tasks[i].title);
+		image_free(bar.tasks[i].icon);
+	}
 	free(bar.tasks);
 	for (i = 0; i < bar.nblocks; i++) {
 		free(bar.blocks[i].cmd);

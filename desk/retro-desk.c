@@ -153,7 +153,7 @@ icon_new(void)
 static Image *
 load_icon_image(const char *path)
 {
-	return image_fit(image_load(desk.app, path), ICON_SZ);
+	return image_load_size(desk.app, path, ICON_SZ);
 }
 
 /* "app ID [Label]": label, command and picture from a .desktop entry */

@@ -7,6 +7,7 @@
  */
 #include "../lib/retroui.h"
 
+#include <stdarg.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -61,6 +62,8 @@ static const struct {
 	{ "center", ACT_CENTER }, { "to_monitor", ACT_TO_MONITOR },
 	{ "dnd", ACT_DND }, { "awake", ACT_AWAKE },
 };
+
+static void bus_event(const char *topic, const char *fmt, ...);
 
 static const char *const snap_names[SNAP_COUNT] = {
 	"", "left", "right", "top", "bottom", "topleft", "topright",
@@ -1198,8 +1201,13 @@ static void
 set_active_prop(void)
 {
 	unsigned long v = wm.focused ? wm.focused->win : None;
+	static unsigned long last = (unsigned long)-1;
 
 	rui_set_prop32(wm.app, wm.root, A(_NET_ACTIVE_WINDOW), XA_WINDOW, &v, 1);
+	if (v != last && v != None && wm.focused)
+		bus_event("wm.focus", "0x%lx\t%s", v,
+		    wm.focused->name ? wm.focused->name : "");
+	last = v;
 }
 
 static void
@@ -1745,6 +1753,7 @@ switch_desktop(unsigned long d)
 	publish_layout();
 	arrange();
 	focus_top();
+	bus_event("wm.workspace", "%lu", d + 1);
 }
 
 static void
@@ -2188,6 +2197,7 @@ set_dnd(int how)
 		return;
 	wm.dnd = on;
 	publish_flags();
+	bus_event("wm.dnd", "%s", on ? "on" : "off");
 	/* notification daemons are paused; windows stop asking for attention */
 	if (wm.dnd_cmd[on] && *wm.dnd_cmd[on])
 		rui_spawn(wm.dnd_cmd[on]);
@@ -3933,6 +3943,132 @@ net_wm_state(Client *c, long action, Atom prop, int *maxbits)
 	}
 }
 
+/* ------------------------------------------------------------------- bus */
+
+/* "wm" on retro-bus: every action of keys.conf by name (close, maximize,
+ * workspace 2, snap left, dnd on ...), plus windows, focus ID, close_window
+ * ID and actions.  Events: wm.focus, wm.workspace, wm.dnd. */
+static void
+bus_event(const char *topic, const char *fmt, ...)
+{
+	char buf[512];
+	va_list ap;
+
+	if (rui_bus_fd() < 0)
+		return;
+	va_start(ap, fmt);
+	vsnprintf(buf, sizeof buf, fmt, ap);
+	va_end(ap);
+	rui_bus_emit(topic, buf);
+}
+
+static char *
+class_of(Window w)
+{
+	XClassHint ch;
+	char *s;
+
+	memset(&ch, 0, sizeof ch);
+	if (!XGetClassHint(wm.dpy, w, &ch))
+		return rui_strdup("");
+	s = rui_strdup(ch.res_class ? ch.res_class : "");
+	if (ch.res_name)
+		XFree(ch.res_name);
+	if (ch.res_class)
+		XFree(ch.res_class);
+	return s;
+}
+
+static Client *
+bus_client(const char *arg)
+{
+	char *end;
+	unsigned long w = strtoul(arg, &end, 0);
+
+	return *arg && !*end ? client_from_win((Window)w) : NULL;
+}
+
+static void
+on_bus(const RuiBusMsg *m, void *ud)
+{
+	const char *args = m->args;
+	Client *c;
+	size_t i;
+
+	(void)ud;
+	if (strcmp(m->kind, "call"))
+		return;
+	if (!strcmp(m->name, "windows")) {
+		size_t len = 0, cap = 1024;
+		char *out = rui_malloc(cap);
+		int k;
+
+		out[0] = '\0';
+		for (k = 0; k < wm.clients.n; k++) {
+			char *cls, *line;
+
+			c = wm.clients.v[k];
+			cls = class_of(c->win);
+			line = rui_strdupf("%s0x%lx\t%ld\t%s\t%s%s", len ? "\n" : "",
+			    (unsigned long)c->win, c->sticky ? -1L : (long)c->desk + 1,
+			    cls, c->name ? c->name : "", c == wm.focused ? "\t*" : "");
+			if (len + strlen(line) + 1 > cap)
+				out = rui_realloc(out, cap = (len + strlen(line)) * 2 + 1);
+			strcpy(out + len, line);
+			len += strlen(line);
+			free(line);
+			free(cls);
+		}
+		rui_bus_reply(m->id, 1, out);
+		free(out);
+		return;
+	}
+	if (!strcmp(m->name, "focus") || !strcmp(m->name, "close_window")) {
+		if (!(c = bus_client(args))) {
+			rui_bus_reply(m->id, 0, "no such window");
+			return;
+		}
+		if (m->name[0] == 'c')
+			close_client(c);
+		else {
+			if (c->hidden)
+				set_hidden(c, 0);
+			if (!is_visible(c))
+				switch_desktop(c->desk);
+			if (focusable(c))
+				activate(c);
+		}
+		rui_bus_reply(m->id, 1, "");
+		XFlush(wm.dpy);
+		return;
+	}
+	if (!strcmp(m->name, "actions")) {
+		char out[1024] = "";
+
+		for (i = 0; i < sizeof action_names / sizeof action_names[0]; i++) {
+			if (action_names[i].action == ACT_EXEC)
+				continue;
+			if (*out)
+				rui_strlcpy(out + strlen(out), "\n", sizeof out - strlen(out));
+			rui_strlcpy(out + strlen(out), action_names[i].name,
+			    sizeof out - strlen(out));
+		}
+		rui_bus_reply(m->id, 1, out);
+		return;
+	}
+	for (i = 0; i < sizeof action_names / sizeof action_names[0]; i++) {
+		if (strcmp(m->name, action_names[i].name) ||
+		    action_names[i].action == ACT_EXEC)
+			continue;
+		do_action(action_names[i].action, atoi(args), *args ? args : NULL,
+		    0);
+		rui_bus_reply(m->id, 1, "");
+		XFlush(wm.dpy);
+		return;
+	}
+	rui_bus_reply(m->id, 0, "no such method");
+}
+
 static void
 on_client_message(XClientMessageEvent *e)
 {
@@ -4449,8 +4585,11 @@ main(int argc, char **argv)
 	rui_signals_init();
 	wm.app = rui_open("retro-wm");
 	setup();
+	rui_bus_handler(on_bus, NULL);
+	if (rui_settings()->bus)
+		rui_bus_claim("wm");
 #ifdef __OpenBSD__
-	if (pledge("stdio rpath proc exec", NULL) == -1)
+	if (pledge("stdio rpath proc exec unix", NULL) == -1)
 		rui_die("pledge failed");
 #endif
 	wm.running = 1;

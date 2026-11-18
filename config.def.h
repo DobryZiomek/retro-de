@@ -85,8 +85,9 @@ static const RuiBtModule *const bt_modules[] = { BT_MODULES NULL };
 /* Taskbar applets, left to right.  Built in: cpu mem battery net bluetooth
  * volume clock; any block name from below may be used as well.  The CDE
  * front panel shows the same applets in its status area.  dnd and awake
- * are the "do not disturb" and "keep the screen on" switches. */
-static const char bar_applets[] = "cpu mem battery net bluetooth dnd awake volume clock";
+ * are the "do not disturb" and "keep the screen on" switches; notes is
+ * the list of recent notifications. */
+static const char bar_applets[] = "cpu mem battery net bluetooth dnd awake notes volume clock";
 
 /* CDE front panel controls left and right of the workspace switch:
  * clock calendar files editor terminal browser style apps network        */

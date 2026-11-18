@@ -832,41 +832,62 @@ rui_apps_stamp(void)
 char *
 rui_icon_lookup(const char *icon)
 {
-	static const char *const pats[] = {
-		"%s/icons/hicolor/32x32/apps/%s.xpm",
-		"%s/icons/hicolor/48x48/apps/%s.xpm",
-		"%s/pixmaps/%s.xpm",
-		"%s/pixmaps/%s.ppm",
-		"%s/icons/%s.xpm",
-	};
-	char dirs[MAX_DIRS][DIR_LEN], path[2048];
-	int n, i;
-	size_t k;
+	/* an icon_theme first (retro.conf), then hicolor and pixmaps: plain
+	 * file names in fixed places, no index.theme parsing */
+	static const char *const sizes[] = { "48x48", "32x32", "64x64",
+		"scalable", "128x128", "256x256", "24x24", "22x22", "16x16" };
+	static const char *const cats[] = { "apps", "places", "devices",
+		"mimetypes", "categories", "status", "actions" };
+	static const char *const exts[] = { ".png", ".svg", ".xpm" };
+	const char *themes[3];
+	char dirs[MAX_DIRS + 2][DIR_LEN], path[2048], *p;
+	int n, i, t, nt = 0;
+	size_t z, c, e;
 
 	if (!icon || !*icon)
 		return NULL;
 	if (icon[0] == '/') {
 		if ((has_suffix(icon, ".xpm") || has_suffix(icon, ".ppm") ||
-		    has_suffix(icon, ".pnm")) && access(icon, R_OK) == 0)
+		    has_suffix(icon, ".pnm") || has_suffix(icon, ".png") ||
+		    has_suffix(icon, ".svg")) && access(icon, R_OK) == 0)
 			return rui_strdup(icon);
 		return NULL;
 	}
 	if (strchr(icon, '/'))
 		return NULL;
-	n = data_dirs(dirs);
-	if (n < MAX_DIRS) {
+	if ((p = rui_icon_find(icon)))           /* ours, and learned ones */
+		return p;
+	/* our config dir first: icon themes from theme packages live in
+	 * <config dir>/icons/THEME */
+	rui_strlcpy(dirs[0], rui_config_dir(), DIR_LEN);
+	n = 1 + data_dirs(dirs + 1);
+	if (n < MAX_DIRS + 2) {
 		const char *home = getenv("HOME");
 
 		if (home && *home)               /* legacy ~/.icons */
 			snprintf(dirs[n++], DIR_LEN, "%s/.icons", home);
 	}
-	for (i = 0; i < n; i++) {
-		for (k = 0; k < sizeof pats / sizeof pats[0]; k++) {
-			if (pathf(path, sizeof path, pats[k], dirs[i], icon) &&
-			    access(path, R_OK) == 0)
+	if (rui_settings()->icon_theme[0])
+		themes[nt++] = rui_settings()->icon_theme;
+	themes[nt++] = "hicolor";
+	for (t = 0; t < nt; t++)
+		for (z = 0; z < sizeof sizes / sizeof sizes[0]; z++)
+			for (c = 0; c < sizeof cats / sizeof cats[0]; c++)
+				for (i = 0; i < n; i++)
+					for (e = 0; e < sizeof exts / sizeof exts[0]; e++) {
+						if (!strcmp(sizes[z], "scalable") != !strcmp(exts[e],
+						    ".svg"))
+							continue;
+						if (pathf(path, sizeof path, "%s/icons/%s/%s/%s/%s%s",
+						    dirs[i], themes[t], sizes[z], cats[c], icon,
+						    exts[e]) && access(path, R_OK) == 0)
+							return rui_strdup(path);
+					}
+	for (i = 0; i < n; i++)
+		for (e = 0; e < sizeof exts / sizeof exts[0]; e++)
+			if (pathf(path, sizeof path, "%s/pixmaps/%s%s", dirs[i], icon,
+			    exts[e]) && access(path, R_OK) == 0)
 				return rui_strdup(path);
-		}
-	}
 	return NULL;
 }
 

@@ -62,6 +62,7 @@ static const struct {
 	{ "System/Process Monitor", "@terminal -e top" },
 	{ "System/About retro-de", "retro-about" },
 	{ "Settings/Style Manager", "retro-settings" },
+	{ "Settings/Wallpaper", "retro-wallpaper" },
 	{ "Settings/Display", "retro-display" },
 	{ "Settings/Screen Saver", "@screensaver" },
 	{ "Settings/Bluetooth", "retro-bt" },
@@ -155,7 +156,8 @@ static int
 is_image(const char *name)
 {
 	return has_suffix(name, ".xpm") || has_suffix(name, ".ppm") ||
-	    has_suffix(name, ".pnm");
+	    has_suffix(name, ".pnm") || has_suffix(name, ".png") ||
+	    has_suffix(name, ".svg");
 }
 
 /* file name -> label: drops "NN-" and a launcher extension */
@@ -230,25 +232,6 @@ readable(char *path)
 	return NULL;
 }
 
-/* "NAME" in the user's and the installed icons/ folders */
-static char *
-named_image(const char *name)
-{
-	static const char *const exts[] = { ".xpm", ".ppm", ".pnm", "" };
-	const char *bases[2];
-	char *p;
-	int b, e;
-
-	bases[0] = rui_config_dir();
-	bases[1] = rui_data_dir();
-	for (b = 0; b < 2; b++)
-		for (e = 0; e < 4; e++)
-			if (bases[b] && (p = readable(rui_strdupf("%s/icons/%s%s",
-			    bases[b], name, exts[e]))))
-				return p;
-	return NULL;
-}
-
 /* An icon SPEC -> an image path (returned) or a pictogram (*kind) */
 static char *
 resolve_icon(const char *spec, const char *dir, int *kind)
@@ -270,7 +253,7 @@ resolve_icon(const char *spec, const char *dir, int *kind)
 	{
 		char *p = readable(rui_strdupf("%s/%s", dir, spec));
 
-		return p ? p : named_image(spec);
+		return p ? p : rui_icon_find(spec);
 	}
 }
 
@@ -278,13 +261,14 @@ resolve_icon(const char *spec, const char *dir, int *kind)
 static char *
 sidecar_icon(const char *dir, const char *file)
 {
-	static const char *const exts[] = { ".xpm", ".ppm", ".pnm" };
+	static const char *const exts[] = { ".xpm", ".png", ".svg", ".ppm",
+	    ".pnm" };
 	char base[NAME_MAX + 1], *dot, *p;
 	int i, round;
 
 	rui_strlcpy(base, file, sizeof base);
 	for (round = 0; round < 2; round++) {
-		for (i = 0; i < 3; i++)
+		for (i = 0; i < 5; i++)
 			if ((p = readable(rui_strdupf("%s/%s%s", dir, base, exts[i]))))
 				return p;
 		if (!(dot = strrchr(base, '.')) || dot == base)
@@ -314,10 +298,14 @@ read_program(RuiProgram *p, const char *dir, const char *path, const Ent *e)
 			/* a link keeps the name the user gave it */
 			label = has_suffix(e->file, ".desktop") ? rui_strdup(de->name) :
 			    rui_strdup(e->label);
-			/* only a picture given by path: no icon theme lookups */
+			/* a picture given by path, a pictogram, or a NAME found in
+			 * our own icons/ folders (the learned ones included): no
+			 * icon theme lookups */
 			if (de->icon && (de->icon[0] == '/' || rui_icon_kind(de->icon)
 			    >= 0))
 				icon = rui_strdup(de->icon);
+			else if (de->icon)
+				icon = rui_icon_find(de->icon);
 		}
 		rui_desktop_free(de);
 	} else if (access(path, X_OK) == 0) {
@@ -354,6 +342,9 @@ read_program(RuiProgram *p, const char *dir, const char *path, const Ent *e)
 		p->image = resolve_icon(icon, dir, &p->icon);
 	if (!p->image && !(icon && rui_icon_kind(icon) >= 0))
 		p->image = sidecar_icon(dir, e->file);
+	/* the program's own icon, learned from its window */
+	if (!p->image && !(icon && rui_icon_kind(icon) >= 0))
+		p->image = rui_icon_for_cmd(cmd);
 	free(icon);
 	return 1;
 }

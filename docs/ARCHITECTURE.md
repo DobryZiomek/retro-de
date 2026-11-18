@@ -1,17 +1,24 @@
 # Architecture
 
 retro-de is a suite of small, separate X11 programs that share one toolkit.
-There is no daemon, no IPC bus and no required runtime dependency beyond
-Xlib, Xft, Xinerama, Xrandr and Xext.
+There is no required runtime dependency beyond Xlib, Xft, Xinerama, Xrandr
+and Xext. In place of D-Bus there is `retro-bus`, a small line-based
+message bus on a Unix socket ([BUS.md](BUS.md)); everything works without
+it, it only adds the ways programs can reach each other.
 
 ```
-retro-session ──supervises──▶ retro-wm      window manager (ICCCM/EWMH)
+retro-session ──supervises──▶ retro-bus     message bus (Unix socket)
+                              retro-dbus    D-Bus stand-in (optional package)
+                              retro-wm      window manager (ICCCM/EWMH)
                               retro-bar     taskbar / CDE front panel
                               retro-desk    backdrop + desktop icons
                               (autostart)   anything in ~/.config autostart
 
 retro-settings, retro-files, retro-calc, retro-run, retro-net, retro-bt,
 retro-display, retro-programs, retro-about     ordinary X clients
+retro-msg                                      shell client of the bus
+retro-wallpaper                                wallpaper chooser (CRT preview)
+retro-pkg                                      theme packages (.rtp)
 
             all of them link ──▶ libretroui.a   (lib/)
 ```
@@ -25,6 +32,10 @@ retro-display, retro-programs, retro-about     ordinary X clients
 | `modules/` | One file per back end (`audio_*`, `net_*`, `bt_*`, `battery_*`, `power_*`). Each drives a CLI tool or kernel interface and registers a `Rui*Module` struct |
 | `themes/` | Theme modules, built as `.so` and loaded with `dlopen(3)`. See `themes/README` |
 | `wm/ bar/ desk/ ...` | One directory per program, each a single `retro-*.c` |
+| `bus/` | `retro-bus` (the broker) and `retro-msg` (its command-line client); the client library is `lib/bus.c` |
+| `dbus/` | `retro-dbus`, the optional D-Bus session bus: `wire.c` (marshalling), `retro-dbus.c` (the bus), `services.c` (notifications and portals) |
+| `pkg/`, `wallpaper/` | `retro-pkg` (theme packages) and `retro-wallpaper` |
+| `lib/png.c`, `lib/svg.c` | inflate, gzip, a PNG decoder and an SVG rasteriser: images without libpng, zlib or librsvg |
 | `tools/mkwall.c` | Generates the bundled wallpapers at build time |
 | `examples/` | Annotated sample configuration files |
 | `tests/` | Unit tests and the XTest-driven session tests |
@@ -33,7 +44,12 @@ retro-display, retro-programs, retro-about     ordinary X clients
 ## Design rules
 
 - **Optional means optional.** D-Bus, XDG menus/autostart and audio servers
-  are used when present and silently skipped when not.
+  are used when present and silently skipped when not. So is retro-bus:
+  every `rui_bus_*` call returns quietly without it.
+- **Icons without libraries.** Pictograms are drawn in code. Programs' own
+  icons come from `_NET_WM_ICON` and are learned as XPM files
+  (`lib/icons.c`). PNG and SVG are decoded by `lib/png.c` and
+  `lib/svg.c`.
 - **Modules are probed at run time** in the order listed in `config.h`, so
   one binary can serve several init systems or audio stacks.
 - **Back ends shell out.** No module links a library; this keeps the build

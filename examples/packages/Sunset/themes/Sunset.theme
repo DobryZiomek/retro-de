@@ -1,0 +1,18 @@
+# Sunset - warm greys and a dusk-purple title bar
+style = classic
+pattern = solid
+color.face = #d4c4b0
+color.light = #f4ece0
+color.shadow = #8a7460
+color.dark = #3a2a20
+color.text = #1e140e
+color.field = #fbf6ee
+color.select_bg = #7a3e6e
+color.select_fg = #ffffff
+color.title_active = #7a3e6e
+color.title_inactive = #a8988a
+color.title_fg = #ffe9c8
+color.title_fg_inactive = #ece2d6
+color.desktop = #3c2448
+color.alert = #c0392b
+color.good = #3e8e41

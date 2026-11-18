@@ -9,6 +9,10 @@
  * Out); crashed components are respawned a few times.  It works with any
  * init system: it is just fork, exec and waitpid.
  *
+ * retro-bus, the desktop's own message bus, is started first (unless
+ * `bus = off`) and its socket exported as RETRO_BUS, so every component and
+ * program started from here can find it.
+ *
  * D-Bus is optional: with `dbus = auto` (the default) a private session bus
  * is started only if none exists and dbus-daemon is installed, so programs
  * that want one work; without it everything else still runs.
@@ -41,24 +45,121 @@ static Comp comps[] = {
 };
 #define NCOMPS ((int)(sizeof comps / sizeof comps[0]))
 
+static Comp bus = { "retro-bus", 0, 0, 1 };
+static Comp retro_dbus = { "retro-dbus", 0, 0, 1 };
+
 static volatile sig_atomic_t got_signal;
 static pid_t dbus_pid;                 /* the session bus we started */
+static pid_t start(const char *name);
+static void msleep(int ms);
+
+/* retro-bus: the socket path is fixed here and inherited by everything */
+static void
+bus_start(void)
+{
+	char *path;
+	int i;
+
+	if (!rui_settings()->bus || !rui_have_cmd("retro-bus"))
+		return;
+	path = rui_bus_path();
+	setenv("RETRO_BUS", path, 1);
+	free(path);
+	bus.pid = start(bus.name);
+	for (i = 0; i < 50 && bus.pid; i++) {     /* up to a second */
+		if (rui_bus_connect() == 0) {
+			rui_bus_close();
+			return;
+		}
+		if (waitpid(bus.pid, NULL, WNOHANG) == bus.pid) {
+			bus.pid = 0;                       /* one was running already */
+			return;
+		}
+		msleep(20);
+	}
+}
+
+/* retro-dbus, the optional D-Bus stand-in: its socket beside retro-bus's */
+static int
+retro_dbus_start(void)
+{
+	char *bus = rui_bus_path(), *slash = strrchr(bus, '/'), *addr;
+	const char *disp = slash ? strstr(slash, "bus-") : NULL;
+	char *argv[4];
+	int i;
+
+	if (!slash) {
+		free(bus);
+		return -1;
+	}
+	*slash = '\0';
+	mkdir(bus, 0700);
+	addr = rui_strdupf("unix:path=%s/dbus-%s", bus, disp ? disp + 4 : "0");
+	free(bus);
+	argv[0] = "retro-dbus";
+	argv[1] = "-a";
+	argv[2] = addr;
+	argv[3] = NULL;
+	retro_dbus.pid = fork();
+	if (retro_dbus.pid == 0) {
+		signal(SIGTERM, SIG_DFL);
+		signal(SIGINT, SIG_DFL);
+		signal(SIGHUP, SIG_DFL);
+		execvp(argv[0], argv);
+		_exit(127);
+	}
+	if (retro_dbus.pid < 0) {
+		retro_dbus.pid = 0;
+		free(addr);
+		return -1;
+	}
+	setenv("DBUS_SESSION_BUS_ADDRESS", addr, 1);
+	free(addr);
+	/* wait (up to a second) until it answers */
+	for (i = 0; i < 50; i++) {
+		struct stat st;
+		const char *p = getenv("DBUS_SESSION_BUS_ADDRESS") + 10;
+
+		if (stat(p, &st) == 0 && S_ISSOCK(st.st_mode))
+			break;
+		if (waitpid(retro_dbus.pid, NULL, WNOHANG) == retro_dbus.pid) {
+			retro_dbus.pid = 0;
+			unsetenv("DBUS_SESSION_BUS_ADDRESS");
+			return -1;
+		}
+		msleep(20);
+	}
+	/* programs that know the portal use our file chooser */
+	if (rui_settings()->dbus_portal && !getenv("GTK_USE_PORTAL"))
+		setenv("GTK_USE_PORTAL", "1", 1);
+	return 0;
+}
 
 static void
 dbus_start(void)
 {
 	int mode = rui_settings()->dbus;
-	const char *addr = getenv("DBUS_SESSION_BUS_ADDRESS");
+	const char *addr = getenv("DBUS_SESSION_BUS_ADDRESS"),
+	    *server = rui_settings()->dbus_server;
 	char line[512];
 	long pid = 0;
 	FILE *p;
 
 	if (mode == RUI_OFF || (addr && *addr))
 		return;                            /* disabled, or a bus exists */
+	/* retro-dbus first (the optional package), then the real one */
+	if (strcmp(server, "dbus-daemon") && rui_have_cmd("retro-dbus") &&
+	    retro_dbus_start() == 0)
+		return;
+	if (!strcmp(server, "retro")) {
+		fprintf(stderr, "retro-session: dbus_server = retro, but retro-dbus "
+		    "could not start\n");
+		return;
+	}
 	if (!rui_have_cmd("dbus-daemon")) {
 		if (mode == RUI_ON)
-			fprintf(stderr, "retro-session: dbus = on, but dbus-daemon is "
-			    "not installed\n");
+			fprintf(stderr, "retro-session: dbus = on, but neither "
+			    "retro-dbus nor dbus-daemon is installed\n");
 		return;
 	}
 	p = popen("dbus-daemon --session --fork --print-address=1 --print-pid=1 "
@@ -93,6 +194,19 @@ dbus_stop(void)
 	if (dbus_pid > 0)
 		kill(dbus_pid, SIGTERM);
 	dbus_pid = 0;
+	if (retro_dbus.pid > 0) {
+		int i;
+
+		kill(retro_dbus.pid, SIGTERM);
+		for (i = 0; i < 40 && waitpid(retro_dbus.pid, NULL, WNOHANG) == 0;
+		    i++)
+			msleep(25);
+		if (i == 40) {
+			kill(retro_dbus.pid, SIGKILL);
+			waitpid(retro_dbus.pid, NULL, 0);
+		}
+	}
+	retro_dbus.pid = 0;
 }
 
 /* The screen saver is xscreensaver when it is installed (the one NsCDE and
@@ -300,6 +414,7 @@ main(int argc, char **argv)
 		    XDisplayName(NULL));
 		return 1;
 	}
+	bus_start();
 	dbus_start();
 	restore_monitors();
 	saver_start();
@@ -322,6 +437,8 @@ main(int argc, char **argv)
 	XCloseDisplay(dpy);
 	if (!comps[0].pid) {
 		fprintf(stderr, "retro-session: window manager failed to start\n");
+		if (bus.pid > 0)
+			kill(bus.pid, SIGTERM);
 		dbus_stop();
 		return 1;
 	}
@@ -339,6 +456,41 @@ main(int argc, char **argv)
 			if (errno == EINTR)
 				continue;
 			break;                             /* no children left */
+		}
+		if (pid == retro_dbus.pid) {
+			retro_dbus.pid = 0;
+			if (!got_signal && retro_dbus.respawns < MAX_RESPAWN &&
+			    !(WIFEXITED(status) && WEXITSTATUS(status) == 0)) {
+				char *argv[4];
+
+				retro_dbus.respawns++;
+				fprintf(stderr, "retro-session: retro-dbus died, restarting "
+				    "(%d/%d)\n", retro_dbus.respawns, MAX_RESPAWN);
+				msleep(300);
+				argv[0] = "retro-dbus";
+				argv[1] = "-a";
+				argv[2] = getenv("DBUS_SESSION_BUS_ADDRESS");
+				argv[3] = NULL;
+				if (argv[2] && (retro_dbus.pid = fork()) == 0) {
+					execvp(argv[0], argv);
+					_exit(127);
+				}
+				if (retro_dbus.pid < 0)
+					retro_dbus.pid = 0;
+			}
+			continue;
+		}
+		if (pid == bus.pid) {
+			bus.pid = 0;
+			if (!got_signal && bus.respawns < MAX_RESPAWN &&
+			    !(WIFEXITED(status) && WEXITSTATUS(status) == 0)) {
+				bus.respawns++;
+				fprintf(stderr, "retro-session: retro-bus died, restarting "
+				    "(%d/%d)\n", bus.respawns, MAX_RESPAWN);
+				msleep(300);
+				bus.pid = start(bus.name);
+			}
+			continue;
 		}
 		for (i = 0; i < NCOMPS; i++) {
 			Comp *c = &comps[i];
@@ -389,6 +541,15 @@ main(int argc, char **argv)
 		if (comps[i].pid > 0) {
 			kill(comps[i].pid, SIGKILL);
 			waitpid(comps[i].pid, NULL, 0);
+		}
+	}
+	if (bus.pid > 0) {                     /* the bus goes last */
+		kill(bus.pid, SIGTERM);
+		for (i = 0; i < 40 && waitpid(bus.pid, NULL, WNOHANG) == 0; i++)
+			msleep(25);
+		if (i == 40) {
+			kill(bus.pid, SIGKILL);
+			waitpid(bus.pid, NULL, 0);
 		}
 	}
 	saver_stop();

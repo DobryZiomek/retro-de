@@ -623,6 +623,7 @@ subpanel(int kind)
 		break;
 	case FPC_STYLE:
 		rui_menu_add(m, "Style Manager", "retro-settings", 0);
+		rui_menu_add(m, "Wallpaper", "retro-wallpaper", 0);
 		rui_menu_add(m, "Display", "retro-display", 0);
 		rui_menu_add_sep(m);
 		themes = rui_theme_list();

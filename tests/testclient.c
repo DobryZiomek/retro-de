@@ -3,6 +3,10 @@
  * (stands in for xterm).  Plain Xlib, no toolkit.
  *
  *   testclient [-title T] [-geometry WxH+X+Y] [-tray] [-transient WID]
+ *              [-icon] [-class NAME]
+ *
+ * -icon sets a 24x24 _NET_WM_ICON (a red square with a green centre);
+ * -class sets WM_CLASS to NAME/NAME.
  *
  * Prints "window 0x<id>" once the window exists and exits with status 0
  * when the window manager asks it to close (WM_DELETE_WINDOW).
@@ -33,7 +37,8 @@ int
 main(int argc, char **argv)
 {
 	const char *title = "testclient";
-	int x = 0, y = 0, tray = 0, i, positioned = 0;
+	const char *cls = NULL;
+	int x = 0, y = 0, tray = 0, i, positioned = 0, icon = 0;
 	unsigned w = 320, h = 200;
 	Window transient = None, win;
 	Display *dpy;
@@ -54,9 +59,13 @@ main(int argc, char **argv)
 			tray = 1;
 		} else if (!strcmp(argv[i], "-transient") && i + 1 < argc) {
 			transient = (Window)strtoul(argv[++i], NULL, 0);
+		} else if (!strcmp(argv[i], "-icon")) {
+			icon = 1;
+		} else if (!strcmp(argv[i], "-class") && i + 1 < argc) {
+			cls = argv[++i];
 		} else {
 			fprintf(stderr, "usage: testclient [-title T] [-geometry G] "
-			    "[-tray] [-transient WID]\n");
+			    "[-tray] [-transient WID] [-icon] [-class NAME]\n");
 			return 2;
 		}
 	}
@@ -90,6 +99,28 @@ main(int argc, char **argv)
 	XSetWMNormalHints(dpy, win, &sh);
 	if (transient != None)
 		XSetTransientForHint(dpy, win, transient);
+	if (cls) {
+		XClassHint ch;
+
+		ch.res_name = (char *)cls;
+		ch.res_class = (char *)cls;
+		XSetClassHint(dpy, win, &ch);
+	}
+	if (icon) {
+		static unsigned long v[2 + 24 * 24];
+		int k;
+
+		v[0] = v[1] = 24;
+		for (k = 0; k < 24 * 24; k++) {
+			int px = k % 24, py = k / 24;
+
+			v[2 + k] = px >= 8 && px < 16 && py >= 8 && py < 16 ?
+			    0xff00c000UL : 0xffd02020UL;
+		}
+		XChangeProperty(dpy, win, XInternAtom(dpy, "_NET_WM_ICON", False),
+		    XA_CARDINAL, 32, PropModeReplace, (unsigned char *)v,
+		    2 + 24 * 24);
+	}
 
 	if (tray) {
 		char name[40];

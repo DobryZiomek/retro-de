@@ -73,6 +73,19 @@ settings_conf(const char *key, const char *val, void *ud)
 		S.saver_minutes = atoi(val);       /* "never" is 0 */
 	else if (!strcmp(key, "monitor_off"))
 		S.dpms_minutes = atoi(val);
+	else if (!strcmp(key, "bus"))
+		S.bus = rui_conf_bool(val);
+	else if (!strcmp(key, "notifications"))
+		S.notify = rui_conf_bool(val);
+	else if (!strcmp(key, "dbus_server"))
+		rui_strlcpy(S.dbus_server, val, sizeof S.dbus_server);
+	else if (!strcmp(key, "dbus_portal"))
+		S.dbus_portal = rui_conf_bool(val);
+	else if (!strcmp(key, "icon_theme"))
+		rui_strlcpy(S.icon_theme, strcmp(val, "none") ? val : "",
+		    sizeof S.icon_theme);
+	else if (!strcmp(key, "notification_time"))
+		S.notify_seconds = atoi(val);
 	else {
 		for (i = 0; i < RUI_TOOL_COUNT; i++)
 			if (!strcmp(key, rui_tool_keys[i]))
@@ -106,6 +119,11 @@ rui_settings(void)
 	rui_strlcpy(S.screensaver, "auto", sizeof S.screensaver);
 	S.saver_minutes = 10;
 	S.dpms_minutes = 20;
+	S.bus = 1;
+	S.notify = 1;
+	S.notify_seconds = 6;
+	rui_strlcpy(S.dbus_server, "auto", sizeof S.dbus_server);
+	S.dbus_portal = 1;
 	rui_strlcpy(S.power, "auto", sizeof S.power);
 	rui_strlcpy(S.power_priv, "auto", sizeof S.power_priv);
 	rui_strlcpy(S.workspace_names, rui_config.workspace_names,

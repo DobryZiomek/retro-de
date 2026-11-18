@@ -20,6 +20,15 @@ file manager, program groups, calculator and network / Bluetooth / display
 tools, written in plain C on Xlib and Xft.  It needs no D-Bus, no toolkit
 and no particular init system.
 
+%package dbus
+Summary:        D-Bus session bus stand-in for retro-de
+Requires:       %{name} = %{version}-%{release}
+
+%description dbus
+retro-dbus speaks the D-Bus protocol so programs that need a session bus
+work without dbus installed; it also routes desktop notifications and the
+file chooser / open-URI portals to retro-de.
+
 %prep
 %setup -q
 
@@ -27,13 +36,19 @@ and no particular init system.
 make %{?_smp_mflags} PREFIX=%{_prefix} LIBDIR=%{_libdir}/retro-de
 
 %install
-make install PREFIX=%{_prefix} LIBDIR=%{_libdir}/retro-de DESTDIR=%{buildroot}
+make install install-dbus PREFIX=%{_prefix} LIBDIR=%{_libdir}/retro-de \
+    DESTDIR=%{buildroot}
 
 %files
 %license LICENSE
 %doc README.md
 %{_bindir}/retro-*
+%exclude %{_bindir}/retro-dbus
 %{_datadir}/retro-de
 %{_libdir}/retro-de
 %{_includedir}/retro-de
 %{_datadir}/xsessions/retro.desktop
+
+%files dbus
+%license LICENSE
+%{_bindir}/retro-dbus

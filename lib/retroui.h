@@ -81,6 +81,57 @@ int    rui_job_start(const char *cmd, RuiJobFn fn, void *ud);
 int    rui_jobs_active(void);
 void   rui_jobs_shutdown(void);
 
+/* ------------------------------------------------------------ retro bus */
+
+/* A small message bus in place of D-Bus.  retro-bus (started by
+ * retro-session) listens on a Unix socket: $RETRO_BUS, else
+ * ${TMPDIR:-/tmp}/retro-de-UID/bus-DISPLAY.  Programs claim service
+ * names, call methods on each other and broadcast events.  The protocol is
+ * one line of text per message (docs/BUS.md), so a shell script with
+ * retro-msg(1) is a full peer.  Arguments are fields separated by tabs.
+ * Everything here quietly does nothing when no bus is running. */
+typedef struct RuiBusMsg {
+	const char *kind;                  /* "call", "event", "reply", "error" */
+	const char *id;                    /* call, reply, error              */
+	const char *from;                  /* call, event: the sender         */
+	const char *service;               /* call: the name that was called  */
+	const char *name;                  /* call: the method, event: topic  */
+	char *args;                        /* unescaped, may be modified      */
+} RuiBusMsg;
+typedef void (*RuiBusFn)(const RuiBusMsg *m, void *ud);
+
+char *rui_bus_path(void);                      /* malloc'd                    */
+int   rui_bus_connect(void);                   /* 0 = connected               */
+int   rui_bus_fd(void);                        /* -1 when not connected       */
+void  rui_bus_close(void);
+/* incoming calls and events go to fn (from rui_wait or rui_bus_dispatch) */
+void  rui_bus_handler(RuiBusFn fn, void *ud);
+/* claim a service name / follow topics ("notify.*"); both are kept and
+ * renewed when the bus comes back after a restart */
+int   rui_bus_claim(const char *name);         /* 0 ok, -1 taken / no bus */
+void  rui_bus_listen(const char *pattern);
+int   rui_bus_emit(const char *topic, const char *args);
+int   rui_bus_reply(const char *id, int ok, const char *text);
+/* a call that waits (dispatching anything else that arrives meanwhile):
+ * malloc'd answer, NULL without a bus or after timeout_ms; *ok is 1 for a
+ * reply, 0 for an error */
+char *rui_bus_call(const char *service, const char *method, const char *args,
+                   int timeout_ms, int *ok);
+/* a call whose answer is not wanted */
+int   rui_bus_send(const char *service, const char *method, const char *args);
+void  rui_bus_dispatch(void);                  /* handle what has arrived    */
+/* split args at tabs in place; returns the number of fields (<= max) */
+int   rui_bus_fields(char *args, char **v, int max);
+/* the wire escaping: \\ \n \t \r (malloc'd) */
+char *rui_bus_escape(const char *s);
+void  rui_bus_unescape(char *s);
+/* a word usable as a name, method, topic or id: [A-Za-z0-9._:@+-]{1,128}
+ * (topics given to listen may also hold * and ?) */
+int   rui_bus_word_ok(const char *w, int glob);
+/* for rui_wait: the socket to watch (or -1), shortening *timeout_ms while
+ * a reconnect is pending */
+int   rui_bus_wait_fd(int *timeout_ms);
+
 /* ----------------------------------------------------------------- atoms */
 
 #define RUI_ATOMS(X) \
@@ -93,7 +144,7 @@ void   rui_jobs_shutdown(void);
 	X(_NET_ACTIVE_WINDOW) X(_NET_WM_DESKTOP) X(_NET_CLOSE_WINDOW) \
 	X(_NET_MOVERESIZE_WINDOW) X(_NET_WM_MOVERESIZE) X(_NET_FRAME_EXTENTS) \
 	X(_NET_REQUEST_FRAME_EXTENTS) X(_NET_WM_ALLOWED_ACTIONS) \
-	X(_NET_WM_STRUT) X(_NET_WM_STRUT_PARTIAL) X(_NET_WM_PID) \
+	X(_NET_WM_STRUT) X(_NET_WM_STRUT_PARTIAL) X(_NET_WM_PID) X(_NET_WM_ICON) \
 	X(_NET_WM_STATE) X(_NET_WM_STATE_MODAL) X(_NET_WM_STATE_STICKY) \
 	X(_NET_WM_STATE_MAXIMIZED_VERT) X(_NET_WM_STATE_MAXIMIZED_HORZ) \
 	X(_NET_WM_STATE_SHADED) X(_NET_WM_STATE_SKIP_TASKBAR) \
@@ -210,6 +261,12 @@ typedef struct RuiSettings {
 	char screensaver[32];              /* auto xscreensaver blank off    */
 	int saver_minutes;                 /* blank / start the saver after  */
 	int dpms_minutes;                  /* monitor off after; 0 = never   */
+	int bus;                           /* start retro-bus (default on)   */
+	int notify;                        /* show notification popups       */
+	int notify_seconds;                /* default popup time             */
+	char icon_theme[64];               /* "" or e.g. Papirus, Adwaita    */
+	char dbus_server[32];              /* auto, retro, dbus-daemon       */
+	int dbus_portal;                   /* retro-dbus portals (and GTK's)  */
 } RuiSettings;
 
 const RuiSettings *rui_settings(void);
@@ -637,6 +694,34 @@ const char *rui_icon_name(int kind);
 int   rui_icon_guess(const char *cmd);
 /* draws a 32x32 pictogram with its top left corner at (x, y) */
 void  rui_icon_draw(RuiSurf *s, int kind, int x, int y);
+
+/* Icons without XDG: a window's own _NET_WM_ICON, scaled to size x size
+ * RGBA (malloc'd, NULL if it has none); learned copies of those as
+ * <config dir>/icons/learned/CLASS.xpm; and a lookup by name in
+ * <config dir>/icons, <data dir>/icons and the learned ones. */
+unsigned char *rui_netwm_icon(RuiApp *app, Window w, int size);
+int   rui_icon_save_xpm(const char *path, int w, int h,
+                        const unsigned char *rgba);
+char *rui_icon_learned_path(const char *name);  /* malloc'd, NULL if bad */
+int   rui_icon_learn(RuiApp *app, Window w);     /* files written         */
+char *rui_icon_find(const char *name);           /* image path or NULL    */
+char *rui_icon_for_cmd(const char *cmd);         /* by the program's name */
+
+/* lib/png.c and lib/svg.c: images without libpng, zlib or librsvg */
+unsigned char *rui_inflate(const unsigned char *in, size_t inlen,
+                           size_t *outlen, size_t *used);
+unsigned char *rui_zlib_inflate(const unsigned char *in, size_t inlen,
+                                size_t *outlen);
+unsigned char *rui_gunzip(const unsigned char *in, size_t inlen,
+                          size_t *outlen);
+unsigned char *rui_gzip_store(const unsigned char *in, size_t inlen,
+                              size_t *outlen);
+unsigned long  rui_crc32(unsigned long crc, const unsigned char *p, size_t n);
+/* PNG -> RGBA (malloc'd) */
+unsigned char *rui_png_decode(const unsigned char *buf, size_t len,
+                              int *w, int *h);
+/* SVG text (NUL-terminated) -> RGBA; *w, *h: wanted size, 0 = its own */
+unsigned char *rui_svg_render(const char *src, size_t len, int *w, int *h);
 
 /* -------------------------------------------- freedesktop .desktop entries */
 

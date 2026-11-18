@@ -14,6 +14,7 @@ const char rui_default_menu[] =
 	"applications \"Applications\"\n"
 	"menu \"Settings\" {\n"
 	"    item \"Style Manager\" retro-settings\n"
+	"    item \"Wallpaper\" retro-wallpaper\n"
 	"    item \"Display\" retro-display\n"
 	"    item \"Screen Saver\" @screensaver\n"
 	"    item \"Do Not Disturb (on/off)\" @dnd\n"

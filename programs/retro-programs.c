@@ -87,8 +87,7 @@ load_items(void)
 	for (i = 0; i < n; i++) {
 		pm.items[i].p = v[i];              /* takes over the strings */
 		if (pm.app && v[i].image)
-			pm.items[i].img = image_fit(image_load(pm.app, v[i].image),
-			    RUI_ICON_SIZE);
+			pm.items[i].img = image_load_size(pm.app, v[i].image, RUI_ICON_SIZE);
 	}
 	free(v);                               /* the array, not the strings */
 	pm.n = n;

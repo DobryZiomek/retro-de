@@ -1,4 +1,5 @@
-/* Minimal PPM (P3/P6) and XPM3 loaders - no external image libraries. */
+/* PPM (P3/P6), XPM3, PNG and SVG loaders - no external image libraries
+ * (PNG and SVG come from lib/png.c and lib/svg.c).  alpha is 0..255. */
 #include "image.h"
 
 #include <ctype.h>
@@ -61,6 +62,8 @@ image_free(Image *img)
 	free(img);
 }
 
+/* shrinks to fit max x max, averaging the pixels that fall together
+ * (weighted by alpha, so transparent edges stay clean) */
 Image *
 image_fit(Image *img, int max)
 {
@@ -85,20 +88,67 @@ image_fit(Image *img, int max)
 	if (img->alpha)
 		out->alpha = rui_calloc((size_t)w * (size_t)h, 1);
 	for (y = 0; y < h; y++) {
-		int sy = (int)((long)y * img->h / h);
+		int y0 = (int)((long)y * img->h / h), y1 = (int)((long)(y + 1) *
+		    img->h / h);
 
+		if (y1 <= y0)
+			y1 = y0 + 1;
 		for (x = 0; x < w; x++) {
-			int sx = (int)((long)x * img->w / w);
-			size_t si = (size_t)sy * (size_t)img->w + (size_t)sx;
+			int x0 = (int)((long)x * img->w / w), x1 = (int)((long)(x + 1) *
+			    img->w / w), sx, sy;
+			unsigned long r = 0, g = 0, b = 0, a = 0, n = 0;
 			size_t di = (size_t)y * (size_t)w + (size_t)x;
 
-			memcpy(out->rgb + di * 3, img->rgb + si * 3, 3);
-			if (img->alpha)
-				out->alpha[di] = img->alpha[si];
+			if (x1 <= x0)
+				x1 = x0 + 1;
+			for (sy = y0; sy < y1; sy++) {
+				for (sx = x0; sx < x1; sx++) {
+					size_t si = (size_t)sy * (size_t)img->w + (size_t)sx;
+					unsigned pa = img->alpha ? img->alpha[si] : 255;
+
+					r += (unsigned long)img->rgb[si * 3] * pa;
+					g += (unsigned long)img->rgb[si * 3 + 1] * pa;
+					b += (unsigned long)img->rgb[si * 3 + 2] * pa;
+					a += pa;
+					n++;
+				}
+			}
+			if (a) {
+				out->rgb[di * 3] = (unsigned char)(r / a);
+				out->rgb[di * 3 + 1] = (unsigned char)(g / a);
+				out->rgb[di * 3 + 2] = (unsigned char)(b / a);
+			}
+			if (out->alpha)
+				out->alpha[di] = (unsigned char)(a / n);
 		}
 	}
 	image_free(img);
 	return out;
+}
+
+/* RGBA bytes -> Image (takes no ownership of rgba) */
+Image *
+image_from_rgba(const unsigned char *rgba, int w, int h)
+{
+	Image *img = image_new(w, h);
+	size_t i, n;
+	int any = 0;
+
+	if (!img)
+		return NULL;
+	n = (size_t)w * (size_t)h;
+	img->alpha = rui_malloc(n);
+	for (i = 0; i < n; i++) {
+		memcpy(img->rgb + i * 3, rgba + i * 4, 3);
+		img->alpha[i] = rgba[i * 4 + 3];
+		if (rgba[i * 4 + 3] != 255)
+			any = 1;
+	}
+	if (!any) {
+		free(img->alpha);
+		img->alpha = NULL;
+	}
+	return img;
 }
 
 /* -------------------------------------------------------------------- PPM */
@@ -380,25 +430,83 @@ fail:
 	return NULL;
 }
 
-Image *
-image_load(RuiApp *app, const char *path)
+static int
+is_svg(const char *buf, size_t len)
+{
+	size_t n = len < 4096 ? len : 4096, i;
+
+	for (i = 0; i + 4 <= n; i++)
+		if (!memcmp(buf + i, "<svg", 4))
+			return 1;
+	return 0;
+}
+
+/* size > 0: SVG drawn at size x size, others shrunk to fit it */
+static Image *
+load_any(RuiApp *app, const char *path, int size)
 {
 	size_t len = 0;
 	char *buf = read_file(path, &len);
 	Image *img = NULL;
+	const char *kind = "PPM, XPM, PNG or SVG";
 
 	if (!buf) {
 		rui_warn("cannot read image '%s'", path);
 		return NULL;
 	}
-	if (len > 2 && buf[0] == 'P' && (buf[1] == '6' || buf[1] == '3'))
+	if (len > 8 && !memcmp(buf, "\x89PNG\r\n\x1a\n", 8)) {
+		int w, h;
+		unsigned char *rgba = rui_png_decode((unsigned char *)buf, len, &w,
+		    &h);
+
+		kind = "PNG";
+		if (rgba)
+			img = image_from_rgba(rgba, w, h);
+		free(rgba);
+	} else if (len > 2 && buf[0] == 'P' && (buf[1] == '6' || buf[1] == '3')) {
 		img = load_ppm(buf, len);
-	else if (strstr(buf, "XPM") || strchr(buf, '"'))
+	} else if (is_svg(buf, len)) {
+		int w = size > 0 ? size : 0, h = w;
+		unsigned char *rgba;
+
+		kind = "SVG";
+		buf = rui_realloc(buf, len + 1);
+		buf[len] = '\0';
+		if (w <= 0) {
+			/* its own size, kept within reason */
+			rgba = rui_svg_render(buf, len, &w, &h);
+			if (rgba && (w > 4096 || h > 4096)) {
+				free(rgba);
+				w = h = 2048;
+				rgba = rui_svg_render(buf, len, &w, &h);
+			}
+		} else {
+			rgba = rui_svg_render(buf, len, &w, &h);
+		}
+		if (rgba)
+			img = image_from_rgba(rgba, w, h);
+		free(rgba);
+	} else if (strstr(buf, "XPM") || strchr(buf, '"')) {
 		img = load_xpm(app, buf, len);
+	}
 	free(buf);
 	if (!img)
-		rui_warn("'%s' is not a valid PPM (P3/P6) or XPM image", path);
+		rui_warn("'%s' is not a valid %s image", path, kind);
+	else if (size > 0)
+		img = image_fit(img, size);
 	return img;
+}
+
+Image *
+image_load(RuiApp *app, const char *path)
+{
+	return load_any(app, path, 0);
+}
+
+Image *
+image_load_size(RuiApp *app, const char *path, int size)
+{
+	return load_any(app, path, size);
 }
 
 /* -------------------------------------------------------------- rendering */
@@ -576,12 +684,75 @@ image_render(RuiApp *app, const Image *img, Pixmap dst, int w, int h, int mode)
 	return image_render_at(app, img, dst, 0, 0, w, h, mode);
 }
 
+/* blends an image with soft edges onto what dst already shows */
+static int
+draw_blended(RuiApp *app, const Image *img, Drawable dst, int x, int y)
+{
+	Chan cr = chan_of(app->vis->red_mask), cg = chan_of(app->vis->green_mask),
+	    cb = chan_of(app->vis->blue_mask);
+	Window root;
+	int gx, gy, cx0, cy0, cx1, cy1, i, j;
+	unsigned dw, dh, bw, dd;
+	XImage *xi;
+
+	if (!XGetGeometry(app->dpy, dst, &root, &gx, &gy, &dw, &dh, &bw, &dd))
+		return -1;
+	cx0 = x < 0 ? -x : 0;
+	cy0 = y < 0 ? -y : 0;
+	cx1 = x + img->w > (int)dw ? (int)dw - x : img->w;
+	cy1 = y + img->h > (int)dh ? (int)dh - y : img->h;
+	if (cx1 <= cx0 || cy1 <= cy0)
+		return 0;
+	xi = XGetImage(app->dpy, dst, x + cx0, y + cy0, (unsigned)(cx1 - cx0),
+	    (unsigned)(cy1 - cy0), AllPlanes, ZPixmap);
+	if (!xi)
+		return -1;
+	for (j = cy0; j < cy1; j++) {
+		for (i = cx0; i < cx1; i++) {
+			size_t k = (size_t)j * (size_t)img->w + (size_t)i;
+			unsigned a = img->alpha[k], c[3], d[3], n;
+			unsigned long px;
+			Chan ch[3];
+
+			if (!a)
+				continue;
+			ch[0] = cr;
+			ch[1] = cg;
+			ch[2] = cb;
+			px = a == 255 ? 0 : XGetPixel(xi, i - cx0, j - cy0);
+			for (n = 0; n < 3; n++) {
+				unsigned v = (unsigned)((px >> ch[n].shift) &
+				    ((1UL << ch[n].bits) - 1));
+
+				d[n] = ch[n].bits >= 8 ? v >> (ch[n].bits - 8) :
+				    ch[n].bits ? v * 255 / ((1U << ch[n].bits) - 1) : 0;
+				c[n] = (img->rgb[k * 3 + n] * a + d[n] * (255 - a)) / 255;
+			}
+			XPutPixel(xi, i - cx0, j - cy0, chan_put(cr, c[0]) |
+			    chan_put(cg, c[1]) | chan_put(cb, c[2]));
+		}
+	}
+	XPutImage(app->dpy, dst, app->gc, xi, 0, 0, x + cx0, y + cy0,
+	    (unsigned)(cx1 - cx0), (unsigned)(cy1 - cy0));
+	XDestroyImage(xi);
+	return 0;
+}
+
 int
 image_draw(RuiApp *app, const Image *img, Drawable dst, int x, int y)
 {
-	XImage *xi = make_ximage(app, img, img->w, img->h, 0, 0, 0, 0, 0);
+	XImage *xi;
 	Pixmap mask = None;
 
+	if (img->alpha && (app->vis->class == TrueColor ||
+	    app->vis->class == DirectColor)) {
+		size_t i, n = (size_t)img->w * (size_t)img->h;
+
+		for (i = 0; i < n; i++)
+			if (img->alpha[i] && img->alpha[i] != 255)
+				return draw_blended(app, img, dst, x, y);
+	}
+	xi = make_ximage(app, img, img->w, img->h, 0, 0, 0, 0, 0);
 	if (!xi)
 		return -1;
 	if (img->alpha) {
@@ -590,7 +761,7 @@ image_draw(RuiApp *app, const Image *img, Drawable dst, int x, int y)
 
 		for (j = 0; j < img->h; j++)
 			for (i = 0; i < img->w; i++)
-				if (img->alpha[(size_t)j * (size_t)img->w + (size_t)i])
+				if (img->alpha[(size_t)j * (size_t)img->w + (size_t)i] >= 128)
 					bits[j * stride + i / 8] |= (char)(1 << (i % 8));
 		mask = XCreateBitmapFromData(app->dpy, dst, bits, (unsigned)img->w,
 		    (unsigned)img->h);

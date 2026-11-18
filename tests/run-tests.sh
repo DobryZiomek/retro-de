@@ -201,7 +201,8 @@ EOF
 
 for b in retro-wm retro-bar retro-desk retro-run retro-net retro-session \
     retro-settings retro-bt retro-display retro-calc retro-files \
-    retro-programs retro-about; do
+    retro-programs retro-about retro-bus retro-msg retro-pkg retro-wallpaper \
+    retro-dbus; do
 	[ -x "$BIN/$b" ] || { say "missing binary $BIN/$b (run make first)"; exit 2; }
 done
 
@@ -244,6 +245,142 @@ rc=$?
 [ $rc -eq 0 ] || fail "unit tests: $rc check(s) failed"
 if grep -E 'Sanitizer|runtime error' "$WORK/logs/unit.err" >/dev/null; then
 	fail "sanitizer report in unit tests (see $WORK/logs/unit.err)"
+fi
+
+# ---- retro-bus -------------------------------------------------------------
+
+say "== retro-bus =="
+BUSDIR=$(mktemp -d "${TMPDIR:-/tmp}/rbus.XXXXXX")
+chmod 700 "$BUSDIR"
+RETRO_BUS="$BUSDIR/bus" "$BIN/retro-bus" 2> "$WORK/logs/bus.err" &
+buspid=$!
+for _ in 1 2 3 4 5 6 7 8 9 10; do
+	[ -S "$BUSDIR/bus" ] && break
+	sleep 0.1
+done
+bmsg() { RETRO_BUS="$BUSDIR/bus" "$BIN/retro-msg" "$@"; }
+check_eq() {
+	if [ "$1" = "$2" ]; then say "  ok    $3"; else fail "$3 (got '$1')"; fi
+}
+check_eq "$(bmsg call bus ping)" pong "the bus answers"
+RETRO_BUS="$BUSDIR/bus" "$BIN/retro-msg" listen 'test.*' 'bus.*' \
+	> "$WORK/logs/bus-events" &
+lpid=$!
+sleep 0.2
+RETRO_BUS="$BUSDIR/bus" "$BIN/retro-msg" serve echo \
+	'f(){ printf "%s" "$1:$2"; [ "$1" != bad ]; }; f' &
+spid=$!
+sleep 0.3
+check_eq "$(bmsg list)" echo "a service registers its name"
+check_eq "$(bmsg call echo hi 'two words')" "hi:two words" \
+	"a call reaches the service and the reply comes back"
+bmsg -q call echo bad x; check_eq $? 1 "an error answer gives status 1"
+bmsg -q call nobody x; check_eq $? 1 "calling a missing service fails"
+bmsg -q serve echo true; check_eq $? 1 "a taken name cannot be claimed twice"
+bmsg emit test.ping "a	b"
+kill $spid; wait $spid 2>/dev/null
+sleep 0.3
+kill $lpid; wait $lpid 2>/dev/null
+grep -q "^test.ping	:[0-9]*	a	b$" "$WORK/logs/bus-events" &&
+	say "  ok    events reach listeners" || fail "event not delivered"
+grep -q "^bus.leave	bus	echo$" "$WORK/logs/bus-events" &&
+	say "  ok    bus.leave when a service goes" || fail "no bus.leave event"
+kill $buspid; wait $buspid 2>/dev/null
+[ ! -e "$BUSDIR/bus" ] && say "  ok    the socket is removed on exit" ||
+	fail "the bus socket was left behind"
+rmdir "$BUSDIR" 2>/dev/null
+
+# ---- retro-pkg ----------------------------------------------------------------
+
+say "== retro-pkg =="
+PK=$WORK/pkg
+rm -rf "$PK" && mkdir -p "$PK/cfg"
+pkg() { RETRO_DE_CONFIG_DIR="$PK/cfg" "$BIN/retro-pkg" "$@"; }
+if pkg create examples/packages/Sunset "$PK/Sunset.rtp" >/dev/null &&
+    pkg install "$PK/Sunset.rtp" >/dev/null &&
+    [ -f "$PK/cfg/themes/Sunset.theme" ] &&
+    [ -f "$PK/cfg/wallpapers/Sunset.svg" ] && [ -f "$PK/cfg/icons/sunset.svg" ]
+then
+	say "  ok    a package is made and installed (theme, wallpaper, icon)"
+else
+	fail "retro-pkg create/install"
+fi
+pkg list | grep -q "^Sunset " && say "  ok    it is listed" || fail "retro-pkg list"
+if command -v tar >/dev/null 2>&1 && tar tzf "$PK/Sunset.rtp" 2>/dev/null |
+    grep -q "Sunset/package.conf"; then
+	say "  ok    the .rtp is a tar.gz other tools read"
+fi
+mkdir -p "$PK/evil/E"
+printf 'name = Evil\n' > "$PK/evil/E/package.conf"
+printf 'x\n' > "$PK/evil/E/bad"
+if command -v tar >/dev/null 2>&1 && (cd "$PK/evil" && tar cf ../evil.rtp \
+    --transform 's|E/bad|E/../../escape|' E/package.conf E/bad 2>/dev/null); then
+	pkg install "$PK/evil.rtp" > "$WORK/logs/pkg-evil" 2>&1
+	if [ ! -e "$PK/escape" ] && [ ! -e "$PK/cfg/../escape" ] &&
+	    grep -q "refusing" "$WORK/logs/pkg-evil"; then
+		say "  ok    paths leaving the package are refused"
+	else
+		fail "retro-pkg wrote outside the config folder"
+	fi
+	pkg remove Evil >/dev/null 2>&1
+fi
+pkg remove Sunset >/dev/null && [ ! -e "$PK/cfg/themes/Sunset.theme" ] &&
+	say "  ok    remove takes its files away" || fail "retro-pkg remove"
+
+# ---- retro-dbus -------------------------------------------------------------
+
+say "== retro-dbus =="
+if command -v dbus-send >/dev/null 2>&1; then
+	DB=$(mktemp -d "${TMPDIR:-/tmp}/rdbus.XXXXXX")
+	chmod 700 "$DB"
+	ADDR=unix:path=$DB/dbus
+	RETRO_BUS=$DB/bus "$BIN/retro-bus" 2>/dev/null &
+	dbuspid1=$!
+	sleep 0.2
+	RETRO_BUS=$DB/bus RETRO_DE_CONFIG_DIR=$PK/cfg "$BIN/retro-dbus" -a "$ADDR" \
+	    2> "$WORK/logs/dbus.err" &
+	dbuspid2=$!
+	for _ in 1 2 3 4 5 6 7 8 9 10; do
+		[ -S "$DB/dbus" ] && break
+		sleep 0.1
+	done
+	names=$(DBUS_SESSION_BUS_ADDRESS=$ADDR dbus-send --session --print-reply \
+	    --dest=org.freedesktop.DBus / org.freedesktop.DBus.ListNames 2>&1)
+	case $names in
+	*org.freedesktop.Notifications*org.freedesktop.portal.Desktop*)
+		say "  ok    libdbus clients connect; notifications and portal are there" ;;
+	*) fail "retro-dbus ListNames (got: $names)" ;;
+	esac
+	err=$(DBUS_SESSION_BUS_ADDRESS=$ADDR dbus-send --session --print-reply \
+	    --dest=org.nothing.Here / a.b.C 2>&1)
+	case $err in
+	*ServiceUnknown*) say "  ok    a missing service is an error, not a hang" ;;
+	*) fail "retro-dbus missing service (got: $err)" ;;
+	esac
+	if command -v gdbus >/dev/null 2>&1; then
+		RETRO_BUS=$DB/bus "$BIN/retro-msg" serve notify \
+		    'f(){ printf "%s|%s|%s|%s" "$2" "$3" "$6" "$7" > "'"$DB"'/got"; echo 42; }; f' &
+		servepid=$!
+		sleep 0.3
+		id=$(DBUS_SESSION_BUS_ADDRESS=$ADDR gdbus call --session \
+		    -d org.freedesktop.Notifications -o /org/freedesktop/Notifications \
+		    -m org.freedesktop.Notifications.Notify Mail 0 '' 'New mail' \
+		    'from Ala' "['open','Open']" '{"urgency": <byte 2>}' 5000 2>&1)
+		check_eq "$id" "(uint32 42,)" "Notify (GDBus) reaches retro-bar's service"
+		check_eq "$(cat "$DB/got" 2>/dev/null)" "New mail|from Ala|2|open:Open" \
+		    "summary, body, urgency and actions come through"
+		kill $servepid 2>/dev/null
+		wait $servepid 2>/dev/null
+	else
+		say "  skip  Notify checks (gdbus not installed)"
+	fi
+	kill $dbuspid2 $dbuspid1
+	wait $dbuspid2 $dbuspid1 2>/dev/null
+	[ ! -e "$DB/dbus" ] && say "  ok    its socket is removed on exit" ||
+		fail "retro-dbus left its socket"
+	rm -rf "$DB"
+else
+	say "  skip  retro-dbus checks (dbus-send not installed)"
 fi
 
 # ---- full sessions ----------------------------------------------------------

@@ -15,6 +15,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <unistd.h>
+#include <sys/stat.h>
 
 static int failures, checks;
 
@@ -103,7 +104,7 @@ test_menu(void)
 
 	printf("[menu.conf]\n");
 	m = rui_menu_parse(rui_default_menu, "default");
-	CHECK(m->n == 10 && m->items[0].sub && rui_menu_count(m) == 35,
+	CHECK(m->n == 10 && m->items[0].sub && rui_menu_count(m) == 37,
 	    "embedded fallback menu: %d top-level entries, %d commands", m->n,
 	    rui_menu_count(m));
 	CHECK(!strcmp(m->items[0].label, "Programs") &&
@@ -126,7 +127,7 @@ test_menu(void)
 	    "malformed lines are skipped with a warning");
 	rui_menu_free(m);
 	m = rui_menu_load("/nonexistent/menu.conf");
-	CHECK(m && rui_menu_count(m) == 35, "missing menu.conf falls back");
+	CHECK(m && rui_menu_count(m) == 37, "missing menu.conf falls back");
 	rui_menu_free(m);
 }
 
@@ -1213,6 +1214,221 @@ test_calc(void)
 	CHECK(bad == 0, "results in hex, binary and octal; fractions stay decimal");
 }
 
+/* a zlib stream of stored blocks around data (what PNG wants) */
+static unsigned char *
+zlib_store(const unsigned char *d, size_t n, size_t *out)
+{
+	size_t gl, i;
+	unsigned char *gz = rui_gzip_store(d, n, &gl), *z;
+	unsigned long a = 1, b = 0;
+
+	/* the deflate part of the gzip member sits between 10-byte header and
+	 * 8-byte trailer */
+	z = rui_malloc(gl - 18 + 6);
+	z[0] = 0x78;
+	z[1] = 0x01;
+	memcpy(z + 2, gz + 10, gl - 18);
+	for (i = 0; i < n; i++) {
+		a = (a + d[i]) % 65521;
+		b = (b + a) % 65521;
+	}
+	z[gl - 16] = (unsigned char)(b >> 8);
+	z[gl - 15] = (unsigned char)b;
+	z[gl - 14] = (unsigned char)(a >> 8);
+	z[gl - 13] = (unsigned char)a;
+	*out = gl - 18 + 6;
+	free(gz);
+	return z;
+}
+
+static void
+put32(unsigned char *p, unsigned long v)
+{
+	p[0] = (unsigned char)(v >> 24);
+	p[1] = (unsigned char)(v >> 16);
+	p[2] = (unsigned char)(v >> 8);
+	p[3] = (unsigned char)v;
+}
+
+static size_t
+png_chunk(unsigned char *o, const char *type, const unsigned char *d,
+    size_t n)
+{
+	put32(o, (unsigned long)n);
+	memcpy(o + 4, type, 4);
+	memcpy(o + 8, d, n);
+	put32(o + 8 + n, rui_crc32(0, o + 4, n + 4));
+	return n + 12;
+}
+
+static int
+px_is(const unsigned char *rgba, int w, int x, int y, int r, int g, int b,
+    int amin)
+{
+	const unsigned char *p = rgba + ((size_t)y * w + x) * 4;
+
+	return abs(p[0] - r) < 24 && abs(p[1] - g) < 24 && abs(p[2] - b) < 24 &&
+	    p[3] >= amin;
+}
+
+static void
+test_media(void)
+{
+	static const unsigned char raw[] = {
+		0, 255, 0, 0, 255, 0, 255, 0, 128,      /* row 0: red, green 50% */
+		0, 0, 0, 255, 255, 0, 0, 0, 0           /* row 1: blue, clear */
+	};
+	unsigned char big[5000], *gz, *back, png[512], ihdr[13], *z, *rgba;
+	size_t gl, bl, zl, pl = 8;
+	char svg[600];
+	int i, w, h, ok;
+
+	printf("[PNG, SVG, gzip]\n");
+	CHECK(rui_crc32(0, (const unsigned char *)"123456789", 9) == 0xcbf43926UL,
+	    "crc32 check value");
+	for (i = 0; i < (int)sizeof big; i++)
+		big[i] = (unsigned char)(i * 7 % 251);
+	gz = rui_gzip_store(big, sizeof big, &gl);
+	back = rui_gunzip(gz, gl, &bl);
+	CHECK(back && bl == sizeof big && !memcmp(back, big, bl),
+	    "gzip written and read back");
+	free(back);
+	CHECK(rui_gunzip(gz, gl / 2, &bl) == NULL, "a truncated gzip is refused");
+	free(gz);
+
+	/* a 2x2 RGBA PNG made by hand */
+	memcpy(png, "\x89PNG\r\n\x1a\n", 8);
+	put32(ihdr, 2);
+	put32(ihdr + 4, 2);
+	ihdr[8] = 8;
+	ihdr[9] = 6;
+	ihdr[10] = ihdr[11] = ihdr[12] = 0;
+	pl += png_chunk(png + pl, "IHDR", ihdr, 13);
+	z = zlib_store(raw, sizeof raw, &zl);
+	pl += png_chunk(png + pl, "IDAT", z, zl);
+	free(z);
+	pl += png_chunk(png + pl, "IEND", NULL, 0);
+	rgba = rui_png_decode(png, pl, &w, &h);
+	CHECK(rgba && w == 2 && h == 2, "PNG decoded (2x2)");
+	if (rgba) {
+		CHECK(px_is(rgba, 2, 0, 0, 255, 0, 0, 255) &&
+		    px_is(rgba, 2, 1, 0, 0, 255, 0, 128) && rgba[7] == 128 &&
+		    px_is(rgba, 2, 0, 1, 0, 0, 255, 255) && rgba[15] == 0,
+		    "PNG pixels and alpha");
+		free(rgba);
+	}
+	png[20] ^= 0xff;                       /* corrupt the width */
+	rgba = rui_png_decode(png, pl, &w, &h);
+	CHECK(rgba == NULL, "a broken PNG is refused");
+	free(rgba);
+
+	/* SVG: shapes, a path without separators, a gradient */
+	snprintf(svg, sizeof svg, "<svg xmlns=\"http://www.w3.org/2000/svg\" "
+	    "viewBox=\"0 0 10 10\"><rect width=\"10\" height=\"5\" "
+	    "fill=\"#ff0000\"/><circle cx=\"5\" cy=\"7.5\" r=\"2\" "
+	    "style=\"fill:blue\"/></svg>");
+	w = h = 20;
+	rgba = rui_svg_render(svg, strlen(svg), &w, &h);
+	ok = rgba && px_is(rgba, 20, 10, 4, 255, 0, 0, 250) &&
+	    px_is(rgba, 20, 10, 15, 0, 0, 255, 250) && rgba[(19 * 20) * 4 + 3] == 0;
+	CHECK(ok, "SVG rect, circle and transparency");
+	free(rgba);
+	snprintf(svg, sizeof svg, "<svg width=\"8\" height=\"8\"><path "
+	    "d=\"M0 0L8 0L8 8L0 8z\" fill=\"#00ff00\"/></svg>");
+	w = h = 0;
+	rgba = rui_svg_render(svg, strlen(svg), &w, &h);
+	CHECK(rgba && w == 8 && h == 8 && px_is(rgba, 8, 0, 0, 0, 255, 0, 250) &&
+	    px_is(rgba, 8, 7, 7, 0, 255, 0, 250), "SVG path commands right after "
+	    "numbers (\"0L8\")");
+	free(rgba);
+	snprintf(svg, sizeof svg, "<svg viewBox=\"0 0 20 4\"><defs>"
+	    "<linearGradient id=\"g\"><stop offset=\"0\" stop-color=\"#000\"/>"
+	    "<stop offset=\"1\" stop-color=\"#fff\"/></linearGradient></defs>"
+	    "<rect width=\"20\" height=\"4\" fill=\"url(#g)\"/></svg>");
+	w = 20;
+	h = 4;
+	rgba = rui_svg_render(svg, strlen(svg), &w, &h);
+	CHECK(rgba && rgba[(1 * 20 + 1) * 4] < 40 && rgba[(1 * 20 + 18) * 4] > 215,
+	    "SVG linear gradient");
+	free(rgba);
+}
+
+static void
+test_bus(const char *dir)
+{
+	char *e, buf[128], *f[4], *path;
+	int n;
+	unsigned char rgba[4 * 4 * 4];
+	FILE *fp;
+
+	printf("[bus and learned icons]\n");
+	e = rui_bus_escape("a\\b\tc\nd\re");
+	CHECK(!strcmp(e, "a\\\\b\\tc\\nd\\re"), "escape: %s", e);
+	rui_bus_unescape(e);
+	CHECK(!strcmp(e, "a\\b\tc\nd\re"), "unescape restores the text");
+	free(e);
+	rui_strlcpy(buf, "one\ttwo\t\tfour", sizeof buf);
+	n = rui_bus_fields(buf, f, 4);
+	CHECK(n == 4 && !strcmp(f[0], "one") && !strcmp(f[1], "two") &&
+	    !*f[2] && !strcmp(f[3], "four"), "fields split at tabs (%d)", n);
+	CHECK(rui_bus_word_ok("notify.show", 0) && !rui_bus_word_ok("a b", 0) &&
+	    !rui_bus_word_ok("", 0) && !rui_bus_word_ok("wm.*", 0) &&
+	    rui_bus_word_ok("wm.*", 1), "names, methods and patterns");
+	unsetenv("RETRO_BUS");
+	setenv("DISPLAY", ":3.0", 1);
+	path = rui_bus_path();
+	CHECK(strstr(path, "/bus-3") && !strstr(path, "3.0"),
+	    "bus path per display: %s", path);
+	free(path);
+	setenv("RETRO_BUS", "/x/y", 1);
+	path = rui_bus_path();
+	CHECK(!strcmp(path, "/x/y"), "RETRO_BUS wins");
+	free(path);
+	unsetenv("RETRO_BUS");
+	CHECK(rui_bus_connect() < 0 && rui_bus_emit("x.y", "") < 0,
+	    "no bus: calls fail quietly");
+
+	/* a 4x4 icon: transparent top row, then red, green, blue rows */
+	for (n = 0; n < 16; n++) {
+		rgba[n * 4] = n >= 4 && n < 8 ? 255 : 0;
+		rgba[n * 4 + 1] = n >= 8 && n < 12 ? 255 : 0;
+		rgba[n * 4 + 2] = n >= 12 ? 255 : 0;
+		rgba[n * 4 + 3] = n < 4 ? 0 : 255;
+	}
+	(void)dir;                            /* the config dir is fixed by now */
+	path = rui_icon_learned_path("Foo App!");
+	CHECK(path && strstr(path, "/icons/learned/fooapp.xpm"),
+	    "learned icon name: %s", path ? path : "(null)");
+	free(path);
+	CHECK(rui_icon_learned_path("...") == NULL, "unusable names refused");
+	path = rui_strdupf("%s/icons", rui_config_dir());
+	mkdir(path, 0755);
+	free(path);
+	path = rui_strdupf("%s/icons/learned", rui_config_dir());
+	mkdir(path, 0755);
+	free(path);
+	path = rui_icon_learned_path("unittest");
+	CHECK(rui_icon_save_xpm(path, 4, 4, rgba) == 0, "XPM written");
+	if ((fp = fopen(path, "r"))) {
+		char all[1024];
+		size_t len = fread(all, 1, sizeof all - 1, fp);
+
+		all[len] = '\0';
+		fclose(fp);
+		CHECK(strstr(all, "\"4 4 4 2\"") && strstr(all, "c None") &&
+		    strstr(all, "#ff0000") && strstr(all, "#0000ff") &&
+		    strstr(all, "\"        \""), "XPM: size, colours, transparency");
+	}
+	free(path);
+	path = rui_icon_find("unittest");
+	CHECK(path != NULL, "found by name among the learned icons");
+	free(path);
+	path = rui_icon_for_cmd("/usr/bin/unittest --flag");
+	CHECK(path != NULL, "found by a command's program name");
+	free(path);
+	CHECK(rui_icon_for_cmd("@terminal") == NULL, "@-commands keep pictograms");
+}
+
 int
 main(int argc, char **argv)
 {
@@ -1235,6 +1451,8 @@ main(int argc, char **argv)
 	test_display(dir);
 	test_split_config(dir);
 	test_calc();
+	test_bus(dir);
+	test_media();
 	printf("%d checks, %d failed\n", checks, failures);
 	return failures;
 }

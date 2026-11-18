@@ -357,7 +357,8 @@ rui_data_dir(void)
 	return e && *e ? e : RETRO_DATADIR;
 }
 
-static const char *const wp_exts[] = { "", ".ppm", ".xpm", NULL };
+static const char *const wp_exts[] = { "", ".ppm", ".xpm", ".png", ".svg",
+	NULL };
 
 char *
 rui_wallpaper_find(const char *name)

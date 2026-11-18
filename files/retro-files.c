@@ -2,6 +2,12 @@
  * retro-files - a light file explorer.
  *
  *   retro-files [DIRECTORY]
+ *   retro-files --choose [--save NAME] [--dir] [--multiple] [--title T]
+ *               [DIRECTORY]
+ *
+ * --choose turns it into a file chooser (for retro-dbus's FileChooser
+ * portal, and for scripts): the picked paths are printed one per line and
+ * it exits 0; Cancel exits 1.
  *
  * One window: places on the left, the folder as a list (name, size, date)
  * on the right, the path on top.  Files open through @open (xdg-open, or
@@ -38,7 +44,8 @@
 
 enum { SORT_NAME, SORT_SIZE, SORT_DATE };
 enum { FOCUS_LIST, FOCUS_PATH, FOCUS_PROMPT };
-enum { PR_NONE, PR_RENAME, PR_NEWDIR, PR_NEWFILE, PR_OPENWITH };
+enum { PR_NONE, PR_RENAME, PR_NEWDIR, PR_NEWFILE, PR_OPENWITH, PR_SAVEAS };
+enum { CH_NONE, CH_OPEN, CH_SAVE };
 enum { P_FOLDER, P_FOLDER_DK, P_PAPER, P_EXEC, P_LINK, P_COUNT };
 
 typedef struct Ent {
@@ -48,6 +55,13 @@ typedef struct Ent {
 	time_t mtime;
 	mode_t mode;
 } Ent;
+
+static struct {
+	int mode;                          /* CH_*                           */
+	int dir, multiple, done, status;
+	const char *title, *name;
+	RuiButton ok, cancel;
+} ch;
 
 static struct {
 	RuiApp *app;
@@ -310,7 +324,8 @@ go(const char *dir, int remember)
 		rui_strlcpy(fm.cwd, real, sizeof fm.cwd);
 		reload(NULL);
 	}
-	rui_set_title(fm.app, fm.win, fm.cwd, "retro-files");
+	if (!ch.mode)                          /* a chooser keeps its title */
+		rui_set_title(fm.app, fm.win, fm.cwd, "retro-files");
 	set_msg("");
 }
 
@@ -473,6 +488,72 @@ append_quoted(char *cmd, const char *path)
 	return n;
 }
 
+static void start_prompt(int kind, const char *initial);
+
+/* the chooser's answer: paths on stdout, then quit */
+static void
+choose_accept(void)
+{
+	int i, n = 0;
+
+	if (ch.mode == CH_SAVE) {
+		const char *t = fm.prompt.text;
+		char *full;
+		struct stat st;
+
+		if (!*t || strchr(t, '/')) {
+			set_msg(*t ? "A name cannot contain a slash." :
+			    "Type a name for the file.");
+			fm.focus = FOCUS_PROMPT;
+			return;
+		}
+		full = join(fm.cwd, t);
+		if (stat(full, &st) == 0) {
+			char q[400];
+
+			if (S_ISDIR(st.st_mode)) {
+				go(full, 1);
+				rui_input_set(&fm.prompt, ch.name ? ch.name : "");
+				free(full);
+				return;
+			}
+			snprintf(q, sizeof q, "\"%.200s\" exists. Replace it?", t);
+			if (!rui_confirm(fm.app, "Save", q, "Replace")) {
+				free(full);
+				return;
+			}
+		}
+		printf("%s\n", full);
+		free(full);
+		n = 1;
+	} else {
+		for (i = 0; i < fm.n; i++) {
+			char *full;
+
+			if (!fm.ents[i].sel || (fm.ents[i].dir != ch.dir))
+				continue;
+			if (n && !ch.multiple)
+				break;
+			full = join(fm.cwd, fm.ents[i].name);
+			printf("%s\n", full);
+			free(full);
+			n++;
+		}
+		if (!n && ch.dir) {                /* the folder being shown */
+			printf("%s\n", fm.cwd);
+			n = 1;
+		}
+		if (!n) {
+			set_msg(ch.dir ? "Pick a folder." : "Pick a file.");
+			return;
+		}
+	}
+	fflush(stdout);
+	ch.done = 1;
+	ch.status = 0;
+	fm.running = 0;
+}
+
 static void
 open_entry(int idx)
 {
@@ -483,6 +564,12 @@ open_entry(int idx)
 	full = join(fm.cwd, fm.ents[idx].name);
 	if (fm.ents[idx].dir) {
 		go(full, 1);
+	} else if (ch.mode == CH_SAVE) {
+		rui_input_set(&fm.prompt, fm.ents[idx].name);
+		choose_accept();
+	} else if (ch.mode == CH_OPEN) {
+		select_only(idx);
+		choose_accept();
 	} else {
 		char buf[256];
 
@@ -632,6 +719,11 @@ finish_prompt(void)
 	fm.prompt_kind = PR_NONE;
 	fm.focus = FOCUS_LIST;
 	fm.dirty = 1;
+	if (kind == PR_SAVEAS) {
+		fm.prompt_kind = PR_SAVEAS;
+		choose_accept();
+		return;
+	}
 	if (!*t)
 		return;
 	if (kind == PR_OPENWITH) {
@@ -721,6 +813,17 @@ layout(void)
 	fm.r_status.w = fm.w - 12;
 	fm.r_status.h = sh;
 	fm.r_status.y = fm.h - sh - 5;
+	if (ch.mode) {
+		int bw2 = 84;
+
+		fm.r_status.w -= 2 * (bw2 + 6);
+		ch.ok.r.x = fm.r_status.x + fm.r_status.w + 6;
+		ch.cancel.r.x = ch.ok.r.x + bw2 + 6;
+		ch.ok.r.y = ch.cancel.r.y = fm.r_status.y;
+		ch.ok.r.w = ch.cancel.r.w = bw2;
+		ch.ok.r.h = ch.cancel.r.h = sh;
+		ch.ok.bold = 1;
+	}
 	fm.r_side.x = 6;
 	fm.r_side.y = y;
 	fm.r_side.w = SIDE_W;
@@ -801,17 +904,22 @@ static void
 draw_status(void)
 {
 	static const char *const labels[] = {
-		"", "Rename to:", "New folder:", "New file:", "Open with:"
+		"", "Rename to:", "New folder:", "New file:", "Open with:",
+		"File name:"
 	};
 	RuiSurf *s = fm.s;
 	RuiApp *a = fm.app;
 	RuiRect r = fm.r_status;
 	char buf[400];
 
+	if (ch.mode) {
+		rui_button_draw(s, &ch.ok);
+		rui_button_draw(s, &ch.cancel);
+	}
 	rui_bevel(s, r.x, r.y, r.w, r.h, RUI_SUNKEN_THIN);
 	r.x += 6;
 	r.w -= 12;
-	if (fm.focus == FOCUS_PROMPT) {
+	if (fm.focus == FOCUS_PROMPT || fm.prompt_kind == PR_SAVEAS) {
 		RuiRect l = r;
 
 		l.w = 96;
@@ -821,8 +929,15 @@ draw_status(void)
 		fm.prompt.r.y = r.y + 1;
 		fm.prompt.r.w = r.w - 100;
 		fm.prompt.r.h = r.h - 2;
-		fm.prompt.focused = 1;
+		fm.prompt.focused = fm.focus == FOCUS_PROMPT;
 		rui_input_draw(s, &fm.prompt);
+		if (fm.msg[0] && ch.mode) {
+			RuiRect m = fm.r_status;
+
+			m.y -= a->font->height + 4;
+			m.h = a->font->height;
+			rui_text_fit(s, a->font, m, fm.msg, RUI_C_ALERT, RUI_LEFT);
+		}
 		return;
 	}
 	if (fm.msg[0]) {
@@ -1065,7 +1180,16 @@ on_button(XButtonEvent *e)
 {
 	int rh = row_h(), sx, dx, ex, idx = -1;
 
-	if (fm.focus == FOCUS_PROMPT) {
+	if (fm.prompt_kind == PR_SAVEAS && rui_in_rect(fm.prompt.r, e->x, e->y)) {
+		XEvent ev;
+
+		fm.focus = FOCUS_PROMPT;
+		ev.xbutton = *e;
+		rui_input_event(fm.app, &fm.prompt, &ev);
+		fm.dirty = 1;
+		return;
+	}
+	if (fm.focus == FOCUS_PROMPT && fm.prompt_kind != PR_SAVEAS) {
 		if (rui_in_rect(fm.prompt.r, e->x, e->y)) {
 			XEvent ev;
 
@@ -1140,6 +1264,8 @@ on_button(XButtonEvent *e)
 			return;
 		} else {
 			select_only(idx);
+			if (ch.mode == CH_SAVE && !fm.ents[idx].dir)
+				rui_input_set(&fm.prompt, fm.ents[idx].name);
 		}
 		fm.last_idx = idx;
 		fm.last_click = now;
@@ -1222,6 +1348,10 @@ on_key(XEvent *ev)
 				go(fm.path.text, 1);
 			}
 		} else if (r & RUI_EV_CANCEL) {
+			if (fm.prompt_kind == PR_SAVEAS) {
+				fm.running = 0;            /* the chooser is cancelled */
+				return;
+			}
 			fm.prompt_kind = PR_NONE;
 			fm.focus = FOCUS_LIST;
 			rui_input_set(&fm.path, fm.cwd);
@@ -1338,6 +1468,19 @@ handle_event(XEvent *ev)
 	case MotionNotify:
 		if (ev->xany.window != fm.win)
 			break;
+		if (ch.mode) {
+			if (rui_button_event(&ch.ok, ev) & RUI_EV_ACTIVATE)
+				choose_accept();
+			if (rui_button_event(&ch.cancel, ev) & RUI_EV_ACTIVATE)
+				fm.running = 0;
+			if (!fm.running)
+				break;
+			if (rui_in_rect(ch.ok.r, ev->xbutton.x, ev->xbutton.y) ||
+			    rui_in_rect(ch.cancel.r, ev->xbutton.x, ev->xbutton.y)) {
+				fm.dirty = 1;
+				break;
+			}
+		}
 		if (fm.focus != FOCUS_PROMPT) {
 			if (rui_button_event(&fm.b_back, ev) & RUI_EV_ACTIVATE)
 				go_back();
@@ -1426,7 +1569,14 @@ setup(const char *start)
 	    ButtonPressMask | ButtonReleaseMask | ButtonMotionMask |
 	    StructureNotifyMask);
 	fm.s = rui_surf_new(a, fm.win, fm.w, fm.h);
-	rui_set_title(a, fm.win, "Files", "retro-files");
+	rui_set_title(a, fm.win, ch.title ? ch.title : ch.mode == CH_SAVE ?
+	    "Save File" : ch.mode == CH_OPEN ? (ch.dir ? "Choose a Folder" :
+	    "Open File") : "Files", "retro-files");
+	if (ch.mode) {
+		ch.ok.label = ch.mode == CH_SAVE ? "Save" : ch.dir ? "Select" : "Open";
+		ch.cancel.label = "Cancel";
+		rui_set_window_type(a, fm.win, A__NET_WM_WINDOW_TYPE_DIALOG);
+	}
 	memset(&sh, 0, sizeof sh);
 	sh.flags = PMinSize | PSize;
 	sh.width = fm.w;
@@ -1442,6 +1592,9 @@ setup(const char *start)
 	go(start && *start ? start : "~", 0);
 	if (!fm.cwd[0])
 		go("/", 0);
+	if (ch.mode == CH_SAVE) {
+		start_prompt(PR_SAVEAS, ch.name ? ch.name : "");
+	}
 	XMapWindow(a->dpy, fm.win);
 }
 
@@ -1451,17 +1604,39 @@ main(int argc, char **argv)
 	long long t_check = 0;
 	int i;
 
-	if (argc > 1 && !strcmp(argv[1], "-v")) {
-		puts("retro-files " RUI_VERSION);
-		return 0;
+	const char *start = NULL;
+
+	for (i = 1; i < argc; i++) {
+		if (!strcmp(argv[i], "-v")) {
+			puts("retro-files " RUI_VERSION);
+			return 0;
+		} else if (!strcmp(argv[i], "--choose")) {
+			if (!ch.mode)
+				ch.mode = CH_OPEN;
+		} else if (!strcmp(argv[i], "--save") && i + 1 < argc) {
+			ch.mode = CH_SAVE;
+			ch.name = argv[++i];
+		} else if (!strcmp(argv[i], "--dir")) {
+			ch.dir = 1;
+		} else if (!strcmp(argv[i], "--multiple")) {
+			ch.multiple = 1;
+		} else if (!strcmp(argv[i], "--title") && i + 1 < argc) {
+			ch.title = argv[++i];
+		} else if (argv[i][0] != '-' && !start) {
+			start = argv[i];
+		} else {
+			fprintf(stderr, "usage: retro-files [-v] [DIRECTORY]\n"
+			    "       retro-files --choose [--save NAME] [--dir] "
+			    "[--multiple] [--title T] [DIRECTORY]\n");
+			return 2;
+		}
 	}
-	if (argc > 2 || (argc == 2 && argv[1][0] == '-')) {
-		fprintf(stderr, "usage: retro-files [-v] [DIRECTORY]\n");
-		return 2;
-	}
+	if (ch.mode == CH_SAVE)
+		ch.dir = 0;
+	ch.status = 1;
 	rui_signals_init();
 	fm.app = rui_open("retro-files");
-	setup(argc > 1 ? argv[1] : NULL);
+	setup(start);
 #ifdef __OpenBSD__
 	if (pledge("stdio rpath wpath cpath proc exec", NULL) == -1)
 		rui_die("pledge failed");
@@ -1501,5 +1676,5 @@ main(int argc, char **argv)
 	rui_surf_free(fm.s);
 	XDestroyWindow(fm.app->dpy, fm.win);
 	rui_close(fm.app);
-	return 0;
+	return ch.mode ? ch.status : 0;
 }

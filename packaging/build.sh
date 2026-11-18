@@ -42,8 +42,11 @@ for f in ${*:-src deb rpm arch apk}; do
 		$OBSD_SSH "rm -rf /tmp/rpkg && mkdir /tmp/rpkg" </dev/null
 		$OBSD_SSH "tar -xzf - -C /tmp/rpkg" < "$OUT/retro-de-$V.tar.gz"
 		$OBSD_SSH "sh -s /tmp/rpkg/retro-de-$V" < packaging/openbsd.sh
+		R=$($OBSD_SSH 'uname -r') M=$($OBSD_SSH 'uname -m')
 		$OBSD_SSH "cat /tmp/rpkg/retro-de-$V.tgz" \
-		    > "$OUT/retro-de-$V-openbsd-$($OBSD_SSH 'uname -r')-$($OBSD_SSH 'uname -m').tgz" ;;
+		    > "$OUT/retro-de-$V-openbsd-$R-$M.tgz"
+		$OBSD_SSH "cat /tmp/rpkg/retro-de-dbus-$V.tgz" \
+		    > "$OUT/retro-de-dbus-$V-openbsd-$R-$M.tgz" ;;
 	*)
 		echo "unknown format $f" >&2; exit 2 ;;
 	esac

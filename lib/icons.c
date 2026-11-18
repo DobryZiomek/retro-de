@@ -1,12 +1,16 @@
 /*
  * libretroui pictograms: 32x32 icons drawn from rectangles in the theme's
  * colours, so they need no image files, icon themes or XDG lookups.  Used
- * by the desktop, the Programs window and the About box.
+ * by the desktop, the Programs window and the About box.  Below them: the
+ * icons programs bring along (_NET_WM_ICON), learned as XPM files.
  */
 #include "retroui.h"
 
+#include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <unistd.h>
+#include <sys/stat.h>
 
 static const char *const names[RUI_ICON_COUNT] = {
 	"app", "terminal", "folder", "file", "computer", "network",
@@ -86,6 +90,7 @@ rui_icon_guess(const char *cmd)
 	static const char *const settings[] = { "retro-settings", "lxappearance",
 		"xfce4-settings-manager", NULL };
 	static const char *const displays[] = { "retro-display", "@screensaver",
+		"retro-wallpaper",
 		"xscreensaver-settings", "xscreensaver-demo", "arandr", "xrandr",
 		NULL };
 	static const char *const monitors[] = { "top", "htop", "btop", "xload",
@@ -384,4 +389,284 @@ rui_icon_draw(RuiSurf *s, int kind, int x, int y)
 		rui_bevel(s, x + 4, y + 14, 24, 12, RUI_SUNKEN_THIN);
 		break;
 	}
+}
+
+/* ------------------------------------------------- icons without XDG */
+
+/*
+ * Programs that set _NET_WM_ICON (nearly every toolkit does) bring their
+ * own picture: retro-bar shows it on the task button and keeps a copy as
+ * <config dir>/icons/learned/NAME.xpm under the window's class and
+ * instance names.  From then on the Programs window, the desktop and the
+ * menus find that picture by the program's name: no icon theme, no
+ * index.theme, no XDG directories.
+ */
+
+/* the best ARGB image in _NET_WM_ICON scaled to size x size: RGBA bytes
+ * (malloc'd), or NULL when the window has none */
+unsigned char *
+rui_netwm_icon(RuiApp *app, Window w, int size)
+{
+	unsigned long *v;
+	int n = rui_get_prop32(app, w, app->atom[A__NET_WM_ICON], &v), i = 0,
+	    best = -1, bw = 0, bh = 0;
+	unsigned char *out;
+	int x, y;
+
+	if (n <= 0 || size <= 0) {
+		free(v);
+		return NULL;
+	}
+	/* the smallest one at least `size` big, else the biggest */
+	while (i + 2 <= n) {
+		unsigned long iw = v[i], ih = v[i + 1];
+
+		if (!iw || !ih || iw > 1024 || ih > 1024 ||
+		    (unsigned long)(n - i - 2) < iw * ih)
+			break;
+		if (best < 0 ||
+		    (bw < size && (int)iw > bw) ||
+		    ((int)iw >= size && (int)iw < bw)) {
+			best = i;
+			bw = (int)iw;
+			bh = (int)ih;
+		}
+		i += 2 + (int)(iw * ih);
+	}
+	if (best < 0) {
+		free(v);
+		return NULL;
+	}
+	out = rui_malloc((size_t)size * (size_t)size * 4);
+	/* box filter: average every source pixel that falls in a target pixel,
+	 * colour weighted by alpha (so transparent edges stay clean) */
+	for (y = 0; y < size; y++) {
+		int y0 = y * bh / size, y1 = (y + 1) * bh / size;
+
+		if (y1 <= y0)
+			y1 = y0 + 1;
+		for (x = 0; x < size; x++) {
+			int x0 = x * bw / size, x1 = (x + 1) * bw / size, sx, sy;
+			unsigned long r = 0, g = 0, b = 0, a = 0, cnt = 0;
+			unsigned char *o = out + ((size_t)y * (size_t)size + (size_t)x) * 4;
+
+			if (x1 <= x0)
+				x1 = x0 + 1;
+			for (sy = y0; sy < y1 && sy < bh; sy++) {
+				for (sx = x0; sx < x1 && sx < bw; sx++) {
+					unsigned long p = v[best + 2 + sy * bw + sx] & 0xffffffffUL;
+					unsigned long pa = p >> 24;
+
+					r += ((p >> 16) & 0xff) * pa;
+					g += ((p >> 8) & 0xff) * pa;
+					b += (p & 0xff) * pa;
+					a += pa;
+					cnt++;
+				}
+			}
+			o[0] = (unsigned char)(a ? r / a : 0);
+			o[1] = (unsigned char)(a ? g / a : 0);
+			o[2] = (unsigned char)(a ? b / a : 0);
+			o[3] = (unsigned char)(cnt ? a / cnt : 0);
+		}
+	}
+	free(v);
+	return out;
+}
+
+/* writes RGBA as an XPM (alpha below 128 is transparent) */
+int
+rui_icon_save_xpm(const char *path, int w, int h, const unsigned char *rgba)
+{
+	static const char abc[] =
+	    "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789#$";
+	unsigned long *cols;
+	int *idx, ncol = 0, i, k, x, y;
+	char tmp[1024];
+	FILE *f;
+
+	if (w <= 0 || h <= 0 || w * h > 4000)
+		return -1;
+	cols = rui_malloc((size_t)(w * h) * sizeof *cols);
+	idx = rui_malloc((size_t)(w * h) * sizeof *idx);
+	for (i = 0; i < w * h; i++) {
+		const unsigned char *p = rgba + (size_t)i * 4;
+		unsigned long c;
+
+		if (p[3] < 128) {
+			idx[i] = -1;
+			continue;
+		}
+		c = (unsigned long)p[0] << 16 | (unsigned long)p[1] << 8 | p[2];
+		for (k = 0; k < ncol && cols[k] != c; k++)
+			;
+		if (k == ncol)
+			cols[ncol++] = c;
+		idx[i] = k;
+	}
+	snprintf(tmp, sizeof tmp, "%s.tmp%ld", path, (long)getpid());
+	if (!(f = fopen(tmp, "w"))) {
+		free(cols);
+		free(idx);
+		return -1;
+	}
+	/* two characters per pixel; "  " is transparent */
+	fprintf(f, "/* XPM */\nstatic char *icon[] = {\n\"%d %d %d 2\",\n"
+	    "\"   c None\",\n", w, h, ncol + 1);
+	for (k = 0; k < ncol; k++)
+		fprintf(f, "\"%c%c c #%06lx\",\n", abc[k / 64], abc[k % 64], cols[k]);
+	for (y = 0; y < h; y++) {
+		fputc('"', f);
+		for (x = 0; x < w; x++) {
+			k = idx[y * w + x];
+			if (k < 0)
+				fputs("  ", f);
+			else
+				fprintf(f, "%c%c", abc[k / 64], abc[k % 64]);
+		}
+		fputs(y + 1 < h ? "\",\n" : "\"\n", f);
+	}
+	fputs("};\n", f);
+	free(cols);
+	free(idx);
+	if (fclose(f) != 0 || rename(tmp, path) != 0) {
+		unlink(tmp);
+		return -1;
+	}
+	return 0;
+}
+
+/* "Firefox" -> "firefox"; NULL if nothing usable is left */
+static char *
+icon_key(const char *name)
+{
+	char *k, *o;
+	const char *p;
+
+	if (!name || !*name || strlen(name) > 120)
+		return NULL;
+	o = k = rui_malloc(strlen(name) + 1);
+	for (p = name; *p; p++) {
+		unsigned char c = (unsigned char)*p;
+
+		if (c >= 'A' && c <= 'Z')
+			*o++ = (char)(c - 'A' + 'a');
+		else if ((c >= 'a' && c <= 'z') || (c >= '0' && c <= '9') ||
+		    c == '.' || c == '-' || c == '_' || c == '+')
+			*o++ = (char)c;
+	}
+	*o = '\0';
+	if (!*k || k[0] == '.') {
+		free(k);
+		return NULL;
+	}
+	return k;
+}
+
+char *
+rui_icon_learned_path(const char *name)
+{
+	char *k = icon_key(name), *p;
+
+	if (!k)
+		return NULL;
+	p = rui_strdupf("%s/icons/learned/%s.xpm", rui_config_dir(), k);
+	free(k);
+	return p;
+}
+
+/* learns a window's icon under its class and instance; returns how many
+ * files were written (existing ones are kept: delete one to relearn it) */
+int
+rui_icon_learn(RuiApp *app, Window w)
+{
+	XClassHint ch;
+	const char *names[2];
+	unsigned char *rgba = NULL;
+	int i, wrote = 0;
+
+	memset(&ch, 0, sizeof ch);
+	if (!XGetClassHint(app->dpy, w, &ch))
+		return 0;
+	names[0] = ch.res_class;
+	names[1] = ch.res_name;
+	for (i = 0; i < 2; i++) {
+		char *path = rui_icon_learned_path(names[i]);
+
+		if (path && access(path, F_OK) != 0) {
+			char *dir;
+
+			if (!rgba && !(rgba = rui_netwm_icon(app, w, RUI_ICON_SIZE))) {
+				free(path);
+				break;
+			}
+			dir = rui_strdupf("%s/icons", rui_config_dir());
+			mkdir(rui_config_dir(), 0755);
+			mkdir(dir, 0755);
+			free(dir);
+			dir = rui_strdupf("%s/icons/learned", rui_config_dir());
+			mkdir(dir, 0755);
+			free(dir);
+			if (rui_icon_save_xpm(path, RUI_ICON_SIZE, RUI_ICON_SIZE,
+			    rgba) == 0)
+				wrote++;
+		}
+		free(path);
+	}
+	free(rgba);
+	if (ch.res_name)
+		XFree(ch.res_name);
+	if (ch.res_class)
+		XFree(ch.res_class);
+	return wrote;
+}
+
+static char *
+readable_file(char *p)
+{
+	struct stat st;
+
+	if (p && stat(p, &st) == 0 && S_ISREG(st.st_mode) &&
+	    access(p, R_OK) == 0)
+		return p;
+	free(p);
+	return NULL;
+}
+
+/* An image by NAME: <config dir>/icons/NAME.{xpm,png,svg,ppm,pnm}, the same in
+ * <data dir>/icons, then the learned one.  No themes, no XDG. */
+char *
+rui_icon_find(const char *name)
+{
+	static const char *const exts[] = { ".xpm", ".png", ".svg", ".ppm",
+	    ".pnm" };
+	const char *bases[2];
+	char *p;
+	int b, e;
+
+	if (!name || !*name || strchr(name, '/') || name[0] == '.')
+		return NULL;
+	bases[0] = rui_config_dir();
+	bases[1] = rui_data_dir();
+	for (b = 0; b < 2; b++)
+		for (e = 0; e < 5; e++)
+			if (bases[b] && (p = readable_file(rui_strdupf("%s/icons/%s%s",
+			    bases[b], name, exts[e]))))
+				return p;
+	return readable_file(rui_icon_learned_path(name));
+}
+
+/* the picture for a command by its program's name ("firefox --new-window"
+ * -> firefox), or NULL; @-commands keep their pictograms */
+char *
+rui_icon_for_cmd(const char *cmd)
+{
+	char w[128];
+
+	if (!cmd || !*cmd)
+		return NULL;
+	first_word(cmd, w, sizeof w);
+	if (!w[0] || w[0] == '@')
+		return NULL;
+	return rui_icon_find(w);
 }
