@@ -1,0 +1,44 @@
+# Builds the release packages (source tarball, .deb, .rpm, Arch .pkg.tar.zst,
+# Alpine .apk) when a v* tag is pushed, and creates the GitHub release with
+# them.  A release that already exists (made by hand, e.g. with the OpenBSD
+# package built in a VM) is left alone; the packages are then only kept as a
+# workflow artifact.  Run it by hand from the Actions tab to just build.
+name: release
+
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  packages:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Tag matches VERSION in config.mk
+        if: startsWith(github.ref, 'refs/tags/')
+        run: test "v$(sed -n 's/^VERSION *= *//p' config.mk)" = "$GITHUB_REF_NAME"
+
+      - name: Build packages
+        run: sh packaging/build.sh
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: retro-de-packages
+          path: dist/*
+
+      - name: Create the release
+        if: startsWith(github.ref, 'refs/tags/')
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          if gh release view "$GITHUB_REF_NAME" >/dev/null 2>&1; then
+            echo "release $GITHUB_REF_NAME exists; leaving its files alone"
+          else
+            gh release create "$GITHUB_REF_NAME" dist/* \
+              --title "retro-de ${GITHUB_REF_NAME#v}" --generate-notes
+          fi

@@ -14,3 +14,6 @@
 /wallpapers/*.ppm
 /wallpapers/*.xpm
 /wallpapers/.stamp
+
+# release packages (packaging/build.sh)
+/dist/

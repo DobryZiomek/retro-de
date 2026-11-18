@@ -1,0 +1,23 @@
+#!/bin/sh
+# openbsd.sh SRCDIR: builds SRCDIR/../retro-de-VERSION.tgz with pkg_create(1)
+# on OpenBSD.  Install it with:  pkg_add -D unsigned ./retro-de-VERSION.tgz
+set -eu
+cd "$1"
+V=$(sed -n 's/^VERSION *= *//p' config.mk)
+S=$PWD/stage
+make -j"$(sysctl -n hw.ncpuonline)" PREFIX=/usr/local
+rm -rf "$S"
+make install PREFIX=/usr/local DESTDIR="$S"
+strip "$S"/usr/local/bin/*
+echo "Small CDE / Windows 95 style desktop environment for X11:" > desc
+echo "window manager, front panel, Style Manager, file manager and tools," >> desc
+echo "in plain C on Xlib and Xft.  https://github.com/DobryZiomek/retro-de" >> desc
+(cd "$S/usr/local" &&
+	# own only our directories, not bin/, share/, lib/ ...
+	find . -type d -path '*retro-de*' | sort | sed 's|^\./||; s|$|/|'
+	find . ! -type d | sort | sed 's|^\./||') > plist
+pkg_create -A "$(uname -m)" \
+    -D COMMENT="small CDE-style desktop environment for X11" \
+    -D MAINTAINER="DobryZiomek <https://github.com/DobryZiomek/retro-de>" \
+    -D FULLPKGPATH=x11/retro-de -D FULLPKGNAME="retro-de-$V" \
+    -d desc -f plist -B "$S" -p /usr/local "../retro-de-$V.tgz"

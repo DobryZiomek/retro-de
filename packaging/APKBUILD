@@ -1,0 +1,20 @@
+# Alpine Linux package for retro-de:  abuild -r
+pkgname=retro-de
+pkgver=1.2
+pkgrel=0
+pkgdesc="Small CDE / Windows 95 style desktop environment for X11"
+url="https://github.com/DobryZiomek/retro-de"
+arch="all"
+license="MIT"
+makedepends="libx11-dev libxft-dev libxinerama-dev libxrandr-dev libxext-dev"
+options="!check"  # the tests need an X server (make check under Xvfb)
+source="$pkgname-$pkgver.tar.gz"
+
+build() {
+	make PREFIX=/usr
+}
+
+package() {
+	make install PREFIX=/usr DESTDIR="$pkgdir"
+	install -Dm644 LICENSE "$pkgdir"/usr/share/licenses/$pkgname/LICENSE
+}

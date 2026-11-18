@@ -105,6 +105,27 @@ DISPLAY=:2 PATH="$PWD/bin:$PATH" RETRO_DE_DATA_DIR="$PWD" retro-session
 
 ## Install
 
+### Packages
+
+Every [release](https://github.com/DobryZiomek/retro-de/releases) has
+ready packages, built with the default `config.h` (all modules, chosen at run
+time):
+
+| System | File | Install |
+|---|---|---|
+| Debian 11+, Ubuntu 20.04+ | `retro-de_VERSION-1_amd64.deb` | `sudo apt install ./retro-de_*.deb` |
+| Fedora, RHEL/Alma/Rocky 8+, openSUSE | `retro-de-VERSION-1.x86_64.rpm` | `sudo dnf install ./retro-de-*.rpm` (openSUSE: `sudo zypper install --allow-unsigned-rpm ./retro-de-*.rpm`) |
+| Arch Linux and derivatives | `retro-de-VERSION-1-x86_64.pkg.tar.zst` | `sudo pacman -U retro-de-*.pkg.tar.zst` |
+| Alpine 3.20+ | `retro-de-VERSION-r0-x86_64.apk` | `sudo apk add --allow-untrusted retro-de-*.apk` |
+| OpenBSD 8.0 | `retro-de-VERSION-openbsd-8.0-amd64.tgz` | rename to `retro-de-VERSION.tgz`, then `doas pkg_add -D unsigned ./retro-de-VERSION.tgz` |
+
+`SHA256SUMS` lists the checksums. The recipes are in `packaging/`
+(`retro-de.spec`, `PKGBUILD`, `APKBUILD`, `deb.sh`, `openbsd.sh`);
+`sh packaging/build.sh` builds the Linux packages in docker, and a pushed
+`v*` tag builds them on GitHub Actions.
+
+### From source
+
     ./configure      # menus: audio, Wi-Fi, Bluetooth, battery, power/init,
                      # D-Bus, XDG, theme, style, font, default tools, prefix
     make
