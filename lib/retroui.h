@@ -28,7 +28,7 @@
 #include <X11/keysym.h>
 #include <X11/Xft/Xft.h>
 
-#define RUI_VERSION "1.2"
+#define RUI_VERSION "1.3"
 
 /* ------------------------------------------------------------------ util */
 
@@ -78,6 +78,11 @@ void   rui_request_quit(void);
  * from rui_wait() once the command has finished. */
 typedef void (*RuiJobFn)(const char *out, int status, void *ud);
 int    rui_job_start(const char *cmd, RuiJobFn fn, void *ud);
+/* A command that keeps running (pactl subscribe, alsactl monitor ...):
+ * fn gets each output line as it arrives (status 0), then NULL and the
+ * exit status when it ends.  Returns an id for rui_watch_stop, or -1. */
+int    rui_watch_start(const char *cmd, RuiJobFn fn, void *ud);
+void   rui_watch_stop(int id);
 int    rui_jobs_active(void);
 void   rui_jobs_shutdown(void);
 
@@ -515,6 +520,9 @@ typedef struct RuiAudioModule {
 	const char *mute_cmd;              /* toggles mute                     */
 	void (*set_cmd)(int percent, char *buf, size_t n);
 	int  (*parse)(const char *out, int *vol, int *muted);
+	/* optional: prints a line whenever the volume may have changed, so
+	 * the panel need not ask every few seconds */
+	const char *watch_cmd;
 } RuiAudioModule;
 
 extern const RuiAudioModule rui_audio_sndio, rui_audio_pipewire,
@@ -757,6 +765,10 @@ long long rui_apps_stamp(void);                 /* changes with the dirs */
 long long rui_menu_stamp(const char *menu_path);
 char *rui_icon_lookup(const char *icon);        /* XPM/PPM path or NULL  */
 int   rui_autostart_xdg(void);                  /* ~/.config/autostart   */
+
+/* cheap change detectors for the panel (0: not available here) */
+unsigned long rui_net_fingerprint(void);
+unsigned long rui_bt_fingerprint(void);
 
 /* ---------------------------------------------- compile-time config.h */
 

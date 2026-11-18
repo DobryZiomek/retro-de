@@ -25,23 +25,24 @@ MODOBJS = modules/audio_sndio.o modules/audio_pipewire.o \
           modules/power_elogind.o modules/power_consolekit.o \
           modules/power_openbsd.o modules/power_freebsd.o \
           modules/power_netbsd.o modules/power_generic.o modules/bt_bluez.o
-PROGOBJS = wm/retro-wm.o bar/retro-bar.o bar/frontpanel.o bar/notify.o \
-          desk/retro-desk.o \
-          desk/image.o settings/retro-settings.o \
-          run/retro-run.o net/retro-net.o session/retro-session.o \
-          bt/retro-bt.o display/retro-display.o display/randr.o \
-          calc/retro-calc.o calc/expr.o files/retro-files.o \
-          programs/retro-programs.o about/retro-about.o \
+# Every program is linked into one executable, bin/retro; bin/retro-wm,
+# bin/retro-bar ... are links to it (see main/retro.c).  Each program's
+# main() is renamed while compiling (the rules below).
+MAINOBJS = wm/retro-wm.o bar/retro-bar.o desk/retro-desk.o run/retro-run.o \
+          net/retro-net.o session/retro-session.o settings/retro-settings.o \
+          bt/retro-bt.o display/retro-display.o calc/retro-calc.o \
+          files/retro-files.o programs/retro-programs.o about/retro-about.o \
           bus/retro-bus.o bus/retro-msg.o pkg/retro-pkg.o \
           wallpaper/retro-wallpaper.o
+PROGOBJS = $(MAINOBJS) bar/frontpanel.o bar/notify.o desk/image.o \
+          display/randr.o calc/expr.o main/retro.o
 # the optional package: the D-Bus stand-in (make install-dbus)
 DBUSOBJS = dbus/retro-dbus.o dbus/wire.o dbus/services.o
 TESTOBJS = tests/unit.o tests/testclient.o tests/drive.o
-BINS    = bin/retro-wm bin/retro-bar bin/retro-desk bin/retro-run \
-          bin/retro-net bin/retro-session bin/retro-settings \
-          bin/retro-bt bin/retro-display bin/retro-calc bin/retro-files \
-          bin/retro-programs bin/retro-about bin/retro-bus bin/retro-msg \
-          bin/retro-pkg bin/retro-wallpaper
+NAMES   = retro-wm retro-bar retro-desk retro-run retro-net retro-session \
+          retro-settings retro-bt retro-display retro-calc retro-files \
+          retro-programs retro-about retro-bus retro-msg retro-pkg \
+          retro-wallpaper
 TESTBINS = tests/unit tests/testclient tests/drive
 # Theme modules: one C file each, loaded at run time.  Add yours here, or
 # build it anywhere with `retro-settings --install-theme mytheme.c`.
@@ -53,7 +54,7 @@ LIBS    = $(LIB) $(X_LIBS) $(DL_LIBS) -lm
 DIRDEFS = -DRETRO_LIBDIR='"$(LIBDIR)"' -DRETRO_DATADIR='"$(DATADIR)"' \
           -DRETRO_INCDIR='"$(INCDIR)"'
 
-all: $(BINS) bin/retro-dbus $(THEMES) $(WALLSTAMP)
+all: bin/retro bin/retro-dbus $(THEMES) $(WALLSTAMP)
 
 config.h:
 	cp config.def.h config.h
@@ -65,6 +66,7 @@ config.h:
 	$(CC) $(CFLAGS) $(SOFLAGS) -Ilib $(X_CFLAGS) -o $@ $<
 
 $(LIBOBJS) $(MODOBJS) $(PROGOBJS) tests/unit.o: lib/retroui.h
+$(MAINOBJS): config.mk
 $(THEMES): lib/retroui.h
 lib/config.o: config.h
 desk/retro-desk.o desk/image.o tests/unit.o programs/retro-programs.o \
@@ -78,62 +80,49 @@ $(LIB): $(LIBOBJS) $(MODOBJS)
 	rm -f $(LIB)
 	$(AR) rcs $(LIB) $(LIBOBJS) $(MODOBJS)
 
-bin/retro-wm: wm/retro-wm.o $(LIB)
+wm/retro-wm.o: wm/retro-wm.c
+	$(CC) $(CFLAGS) $(DIRDEFS) $(X_CFLAGS) -Dmain=retro_wm_main -c -o $@ wm/retro-wm.c
+bar/retro-bar.o: bar/retro-bar.c
+	$(CC) $(CFLAGS) $(DIRDEFS) $(X_CFLAGS) -Dmain=retro_bar_main -c -o $@ bar/retro-bar.c
+desk/retro-desk.o: desk/retro-desk.c
+	$(CC) $(CFLAGS) $(DIRDEFS) $(X_CFLAGS) -Dmain=retro_desk_main -c -o $@ desk/retro-desk.c
+run/retro-run.o: run/retro-run.c
+	$(CC) $(CFLAGS) $(DIRDEFS) $(X_CFLAGS) -Dmain=retro_run_main -c -o $@ run/retro-run.c
+net/retro-net.o: net/retro-net.c
+	$(CC) $(CFLAGS) $(DIRDEFS) $(X_CFLAGS) -Dmain=retro_net_main -c -o $@ net/retro-net.c
+session/retro-session.o: session/retro-session.c
+	$(CC) $(CFLAGS) $(DIRDEFS) $(X_CFLAGS) -Dmain=retro_session_main -c -o $@ session/retro-session.c
+settings/retro-settings.o: settings/retro-settings.c
+	$(CC) $(CFLAGS) $(DIRDEFS) $(X_CFLAGS) -Dmain=retro_settings_main -c -o $@ settings/retro-settings.c
+bt/retro-bt.o: bt/retro-bt.c
+	$(CC) $(CFLAGS) $(DIRDEFS) $(X_CFLAGS) -Dmain=retro_bt_main -c -o $@ bt/retro-bt.c
+display/retro-display.o: display/retro-display.c
+	$(CC) $(CFLAGS) $(DIRDEFS) $(X_CFLAGS) -Dmain=retro_display_main -c -o $@ display/retro-display.c
+calc/retro-calc.o: calc/retro-calc.c
+	$(CC) $(CFLAGS) $(DIRDEFS) $(X_CFLAGS) -Dmain=retro_calc_main -c -o $@ calc/retro-calc.c
+files/retro-files.o: files/retro-files.c
+	$(CC) $(CFLAGS) $(DIRDEFS) $(X_CFLAGS) -Dmain=retro_files_main -c -o $@ files/retro-files.c
+programs/retro-programs.o: programs/retro-programs.c
+	$(CC) $(CFLAGS) $(DIRDEFS) $(X_CFLAGS) -Dmain=retro_programs_main -c -o $@ programs/retro-programs.c
+about/retro-about.o: about/retro-about.c
+	$(CC) $(CFLAGS) $(DIRDEFS) $(X_CFLAGS) -Dmain=retro_about_main -c -o $@ about/retro-about.c
+bus/retro-bus.o: bus/retro-bus.c
+	$(CC) $(CFLAGS) $(DIRDEFS) $(X_CFLAGS) -Dmain=retro_bus_main -c -o $@ bus/retro-bus.c
+bus/retro-msg.o: bus/retro-msg.c
+	$(CC) $(CFLAGS) $(DIRDEFS) $(X_CFLAGS) -Dmain=retro_msg_main -c -o $@ bus/retro-msg.c
+pkg/retro-pkg.o: pkg/retro-pkg.c
+	$(CC) $(CFLAGS) $(DIRDEFS) $(X_CFLAGS) -Dmain=retro_pkg_main -c -o $@ pkg/retro-pkg.c
+wallpaper/retro-wallpaper.o: wallpaper/retro-wallpaper.c
+	$(CC) $(CFLAGS) $(DIRDEFS) $(X_CFLAGS) -Dmain=retro_wallpaper_main -c -o $@ wallpaper/retro-wallpaper.c
+
+bin/retro: $(PROGOBJS) $(LIB)
 	mkdir -p bin
-	$(LINK) -o $@ wm/retro-wm.o $(LIBS)
-bin/retro-bar: bar/retro-bar.o bar/frontpanel.o bar/notify.o desk/image.o $(LIB)
-	mkdir -p bin
-	$(LINK) -o $@ bar/retro-bar.o bar/frontpanel.o bar/notify.o desk/image.o \
-	    $(LIBS)
-bin/retro-desk: desk/retro-desk.o desk/image.o $(LIB)
-	mkdir -p bin
-	$(LINK) -o $@ desk/retro-desk.o desk/image.o $(LIBS)
-bin/retro-run: run/retro-run.o $(LIB)
-	mkdir -p bin
-	$(LINK) -o $@ run/retro-run.o $(LIBS)
-bin/retro-net: net/retro-net.o $(LIB)
-	mkdir -p bin
-	$(LINK) -o $@ net/retro-net.o $(LIBS)
-bin/retro-bt: bt/retro-bt.o $(LIB)
-	mkdir -p bin
-	$(LINK) -o $@ bt/retro-bt.o $(LIBS)
-bin/retro-display: display/retro-display.o display/randr.o $(LIB)
-	mkdir -p bin
-	$(LINK) -o $@ display/retro-display.o display/randr.o $(LIBS)
-bin/retro-calc: calc/retro-calc.o calc/expr.o $(LIB)
-	mkdir -p bin
-	$(LINK) -o $@ calc/retro-calc.o calc/expr.o $(LIBS) -lm
-bin/retro-files: files/retro-files.o $(LIB)
-	mkdir -p bin
-	$(LINK) -o $@ files/retro-files.o $(LIBS)
-bin/retro-programs: programs/retro-programs.o desk/image.o $(LIB)
-	mkdir -p bin
-	$(LINK) -o $@ programs/retro-programs.o desk/image.o $(LIBS)
-bin/retro-about: about/retro-about.o $(LIB)
-	mkdir -p bin
-	$(LINK) -o $@ about/retro-about.o $(LIBS)
-bin/retro-settings: settings/retro-settings.o desk/image.o $(LIB)
-	mkdir -p bin
-	$(LINK) -o $@ settings/retro-settings.o desk/image.o $(LIBS)
-bin/retro-bus: bus/retro-bus.o $(LIB)
-	mkdir -p bin
-	$(LINK) -o $@ bus/retro-bus.o $(LIBS)
-bin/retro-msg: bus/retro-msg.o $(LIB)
-	mkdir -p bin
-	$(LINK) -o $@ bus/retro-msg.o $(LIBS)
-bin/retro-wallpaper: wallpaper/retro-wallpaper.o desk/image.o $(LIB)
-	mkdir -p bin
-	$(LINK) -o $@ wallpaper/retro-wallpaper.o desk/image.o $(LIBS)
-bin/retro-pkg: pkg/retro-pkg.o $(LIB)
-	mkdir -p bin
-	$(LINK) -o $@ pkg/retro-pkg.o $(LIBS)
+	$(LINK) -o $@ $(PROGOBJS) $(LIBS)
+	for n in $(NAMES); do ln -sf retro bin/$$n; done
 bin/retro-dbus: $(DBUSOBJS) $(LIB)
 	mkdir -p bin
 	$(LINK) -o $@ $(DBUSOBJS) $(LIBS)
 $(DBUSOBJS): lib/retroui.h dbus/dbus.h
-bin/retro-session: session/retro-session.o $(LIB)
-	mkdir -p bin
-	$(LINK) -o $@ session/retro-session.o $(LIBS)
 
 # the wallpapers are drawn by a small C program, not shipped as binaries
 tools/mkwall: tools/mkwall.c
@@ -158,7 +147,9 @@ install: all
 	mkdir -p $(DESTDIR)$(BINDIR) $(DESTDIR)$(DATADIR)/wallpapers \
 	   $(DESTDIR)$(DATADIR)/themes $(DESTDIR)$(LIBDIR)/themes \
 	   $(DESTDIR)$(INCDIR)
-	cp $(BINS) $(DESTDIR)$(BINDIR)/
+	cp bin/retro $(DESTDIR)$(BINDIR)/
+	cd $(DESTDIR)$(BINDIR) && for n in $(NAMES); do rm -f $$n; \
+	   ln -s retro $$n; done
 	cp examples/retro.conf examples/menu.conf examples/desktop.conf \
 	   examples/autostart examples/xinitrc examples/example.theme \
 	   examples/keys.conf examples/windows.conf examples/programs.conf \
@@ -166,7 +157,7 @@ install: all
 	cp $(THEMES) $(DESTDIR)$(LIBDIR)/themes/
 	cp themes/*.c themes/README $(DESTDIR)$(DATADIR)/themes/
 	cp lib/retroui.h $(DESTDIR)$(INCDIR)/
-	cp wallpapers/*.ppm wallpapers/*.xpm $(DESTDIR)$(DATADIR)/wallpapers/
+	cp wallpapers/*.png wallpapers/*.xpm $(DESTDIR)$(DATADIR)/wallpapers/
 	mkdir -p $(DESTDIR)$(DATADIR)/packages
 	cp -R examples/packages/Sunset $(DESTDIR)$(DATADIR)/packages/
 	if [ -n "$(XSESSIONSDIR)" ]; then \
@@ -183,17 +174,15 @@ uninstall-dbus:
 	rm -f $(DESTDIR)$(BINDIR)/retro-dbus
 
 uninstall: uninstall-dbus
-	cd $(DESTDIR)$(BINDIR) && rm -f retro-wm retro-bar retro-desk retro-run \
-	   retro-net retro-session retro-settings retro-bt retro-display \
-	   retro-calc retro-files retro-programs retro-about retro-bus retro-msg \
-	   retro-pkg retro-wallpaper
+	cd $(DESTDIR)$(BINDIR) && rm -f retro $(NAMES)
 	rm -f $(DESTDIR)$(XSESSIONSDIR)/retro.desktop
 	rm -rf $(DESTDIR)$(DATADIR) $(DESTDIR)$(LIBDIR) $(DESTDIR)$(INCDIR)
 
 clean:
 	rm -f $(LIBOBJS) $(MODOBJS) $(PROGOBJS) $(DBUSOBJS) $(TESTOBJS) $(LIB) \
-	   $(BINS) bin/retro-dbus \
+	   bin/retro bin/retro-dbus \
 	   $(TESTBINS) $(THEMES) tools/mkwall $(WALLSTAMP)
-	rm -f wallpapers/*.ppm wallpapers/*.xpm
+	rm -f wallpapers/*.png wallpapers/*.ppm wallpapers/*.xpm
+	for n in $(NAMES); do rm -f bin/$$n; done
 
 .PHONY: all check install uninstall clean install-dbus uninstall-dbus

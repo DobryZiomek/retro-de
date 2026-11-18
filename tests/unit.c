@@ -893,7 +893,7 @@ test_theme_modules(const char *dir)
 	rui_strv_free(list);
 
 	w = rui_wallpaper_find("Clouds");
-	CHECK(w && strstr(w, "/wallpapers/Clouds.ppm") && access(w, R_OK) == 0,
+	CHECK(w && strstr(w, "/wallpapers/Clouds.png") && access(w, R_OK) == 0,
 	    "an installed wallpaper is found by name");
 	free(w);
 	snprintf(d, sizeof d, "%s/cfg/wallpapers", dir);
@@ -910,7 +910,7 @@ test_theme_modules(const char *dir)
 	free(w);
 	list = rui_wallpaper_list();
 	for (i = 0, term = broken = 0; list[i]; i++) {
-		term += strstr(list[i], "/Night Sky.ppm") != NULL;
+		term += strstr(list[i], "/Night Sky.png") != NULL;
 		broken += strstr(list[i], "/cfg/wallpapers/Mine.ppm") != NULL;
 	}
 	CHECK(term == 1 && broken == 1 && i >= 14,

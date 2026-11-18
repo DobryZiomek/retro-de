@@ -125,6 +125,7 @@ void switch_desk_rel(int d);
 void notify_init(void);
 int  notify_event(XEvent *ev);         /* 1 when it was for a popup */
 void notify_tick(long long now);
+long long notify_due(void);
 void notify_shutdown(void);
 int  notify_unread(void);
 void notify_center_toggle(int anchor_x);

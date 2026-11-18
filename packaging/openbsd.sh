@@ -8,7 +8,7 @@ S=$PWD/stage
 make -j"$(sysctl -n hw.ncpuonline)" PREFIX=/usr/local
 rm -rf "$S"
 make install PREFIX=/usr/local DESTDIR="$S"
-strip "$S"/usr/local/bin/*
+find "$S/usr/local/bin" -type f -exec strip {} +   # not the links
 echo "Small CDE / Windows 95 style desktop environment for X11:" > desc
 echo "window manager, front panel, Style Manager, file manager and tools," >> desc
 echo "in plain C on Xlib and Xft.  https://github.com/DobryZiomek/retro-de" >> desc
@@ -26,7 +26,7 @@ pkg_create -A "$(uname -m)" \
 S2=$PWD/stage-dbus
 rm -rf "$S2"
 make install-dbus PREFIX=/usr/local DESTDIR="$S2"
-strip "$S2"/usr/local/bin/*
+find "$S2/usr/local/bin" -type f -exec strip {} +
 echo "D-Bus session bus stand-in for retro-de: programs that need a" > desc2
 echo "session bus work without dbus; notifications and portals go to" >> desc2
 echo "retro-de.  https://github.com/DobryZiomek/retro-de" >> desc2

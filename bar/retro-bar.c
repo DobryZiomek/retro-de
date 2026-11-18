@@ -392,6 +392,23 @@ on_block(const char *out, int status, void *ud)
 	}
 }
 
+/* when the next custom block wants to run */
+static long long
+blocks_due(void)
+{
+	long long due = 0x7fffffffffffLL;
+	int i;
+
+	for (i = 0; i < bar.nblocks; i++) {
+		Block *b = &bar.blocks[i];
+
+		if (b->used && !b->busy && b->last + (long long)b->interval * 1000 <
+		    due)
+			due = b->last + (long long)b->interval * 1000;
+	}
+	return due;
+}
+
 static void
 poll_blocks(long long now)
 {
@@ -545,6 +562,8 @@ on_net_status(const char *out, int status, void *ud)
 		net_set_text(NULL);
 }
 
+static void poll_net(void);
+
 static void
 on_net_iface(const char *out, int status, void *ud)
 {
@@ -553,6 +572,8 @@ on_net_iface(const char *out, int status, void *ud)
 	if (status != 0 || !rui_net_parse_iface(bar.net_mod, out, bar.net_iface,
 	    sizeof bar.net_iface))
 		net_set_text(NULL);
+	else
+		poll_net();                    /* found: its status right away */
 }
 
 static void
@@ -594,9 +615,19 @@ on_bt_status(const char *out, int status, void *ud)
 		bar.dirty = 1;
 }
 
+static int bt_force;
+
+/* after the user switched Bluetooth: ask again soon, whatever sysfs says */
+static void
+bt_recheck(void)
+{
+	bt_force = 1;
+}
+
 static void
 poll_bt(void)
 {
+	bt_force = 0;
 	if (!bar.bt_mod || bar.bt_busy)
 		return;
 	if (rui_job_start(bar.bt_mod->status_cmd, on_bt_status, NULL) == 0)
@@ -1354,6 +1385,7 @@ applet_click(Applet *ap, XButtonEvent *e)
 		    bar.bt_mod && bar.bt.present) {
 			rui_spawn(bar.bt_mod->power_cmd[!bar.bt.powered]);
 			bar.bt.powered = !bar.bt.powered;      /* confirmed by a poll */
+			bt_recheck();
 			bar.dirty = 1;
 		}
 		break;
@@ -1769,11 +1801,60 @@ setup(void)
 		poll_net();
 }
 
+/* ------------------------------------------------------------- the loop */
+
+/* The panel sleeps until something is due instead of waking twice a
+ * second, asks the sound system only when it reports a change, and runs
+ * the network and Bluetooth tools only when the links changed (or once a
+ * minute, to be sure). */
+static int audio_watch;                    /* rui_watch_start id, 0 none */
+static long long audio_watch_retry, audio_kick;
+
+static void
+on_audio_event(const char *line, int status, void *ud)
+{
+	(void)status;
+	(void)ud;
+	if (!line) {                           /* the monitor went away */
+		audio_watch = 0;
+		audio_watch_retry = rui_now_ms() + 30000;
+		return;
+	}
+	/* pactl subscribe also reports clients coming and going (our own
+	 * pactl calls among them): only sinks and the server matter */
+	if (strstr(line, "Event '") && !strstr(line, "on sink #") &&
+	    !strstr(line, "on server"))
+		return;
+	if (!audio_kick)
+		audio_kick = rui_now_ms() + 120;   /* events come in bursts */
+}
+
+/* when the clock text can next change */
+static long long
+clock_due(long long now)
+{
+	static const char *const secs = "STrXcs";
+	const char *p;
+
+	for (p = bar.clock_fmt; (p = strchr(p, '%')) && p[1]; p += 2)
+		if (strchr(secs, p[1]))
+			return now - now % 1000 + 1000;
+	return now - now % 60000 + 60000 + 20;
+}
+
+static void
+next_due(long long *due, long long when)
+{
+	if (when < *due)
+		*due = when;
+}
+
 int
 main(int argc, char **argv)
 {
 	long long t_clock = 0, t_cpu = 0, t_bat = 0, t_net = 0, t_audio = 0;
-	long long t_bt = 0;
+	long long t_bt = 0, t_net_full = 0, t_bt_full = 0;
+	unsigned long net_fp = 0, bt_fp = 0;
 	int i, xerrors;
 
 	if (argc > 1) {
@@ -1798,18 +1879,19 @@ main(int argc, char **argv)
 	bar.running = 1;
 	while (bar.running && !rui_quit_requested()) {
 		XEvent ev;
-		long long now;
+		long long now, due;
+		int vol = has_applet(AP_VOL);
 
 		while (bar.running && XPending(bar.dpy)) {
 			XNextEvent(bar.dpy, &ev);
 			handle_event(&ev);
 		}
 		now = rui_now_ms();
-		if (now - t_clock >= 1000) {
-			t_clock = now;
+		if (now >= t_clock) {
 			poll_clock();
+			t_clock = clock_due(now);
 		}
-		if (now - t_cpu >= 2000) {
+		if ((has_applet(AP_CPU) || has_applet(AP_MEM)) && now - t_cpu >= 2000) {
 			t_cpu = now;
 			poll_cpu_mem();
 		}
@@ -1818,16 +1900,47 @@ main(int argc, char **argv)
 			poll_battery();
 		}
 		if (has_applet(AP_NET) && now - t_net >= 5000) {
+			unsigned long fp = rui_net_fingerprint();
+
 			t_net = now;
-			poll_net();
+			/* (a missing Wi-Fi interface is looked for again when the
+			 * links change, or after a minute) */
+			if (!fp || fp != net_fp || now - t_net_full >= 60000 ||
+			    (bar.net_busy == 0 && t_net_full == 0)) {
+				net_fp = fp;
+				t_net_full = now;
+				poll_net();
+			}
 		}
-		if (has_applet(AP_VOL) && now - t_audio >= 3000) {
+		/* sound: follow the mixer's events when it has them */
+		if (vol && bar.audio.mod && bar.audio.mod->watch_cmd &&
+		    !audio_watch && now >= audio_watch_retry) {
+			audio_watch = rui_watch_start(bar.audio.mod->watch_cmd,
+			    on_audio_event, NULL);
+			if (audio_watch < 0) {
+				audio_watch = 0;
+				audio_watch_retry = now + 30000;
+			}
+		}
+		if (vol && audio_kick && now >= audio_kick) {
+			audio_kick = 0;
 			t_audio = now;
 			rui_audio_refresh(&bar.audio);
 		}
-		if (bar.bt_mod && now - t_bt >= 8000) {
+		if (vol && now - t_audio >= (audio_watch ? 60000 : 3000)) {
+			t_audio = now;
+			rui_audio_refresh(&bar.audio);
+		}
+		if (bar.bt_mod && (now - t_bt >= 8000 ||
+		    (bt_force && now - t_bt >= 1500))) {
+			unsigned long fp = rui_bt_fingerprint();
+
 			t_bt = now;
-			poll_bt();
+			if (!fp || fp != bt_fp || bt_force || now - t_bt_full >= 60000) {
+				bt_fp = fp;
+				t_bt_full = now;
+				poll_bt();
+			}
 		}
 		poll_blocks(now);
 		if (bar.fp && fp_busy())
@@ -1835,8 +1948,29 @@ main(int argc, char **argv)
 		notify_tick(now);
 		if (bar.dirty)
 			draw();
-		if (bar.running)
-			rui_wait(bar.app, 500);
+		if (!bar.running)
+			break;
+		/* sleep until the next thing is due */
+		due = t_clock;
+		if (has_applet(AP_CPU) || has_applet(AP_MEM))
+			next_due(&due, t_cpu + 2000);
+		if (has_applet(AP_BAT))
+			next_due(&due, t_bat + 30000);
+		if (has_applet(AP_NET))
+			next_due(&due, t_net + 5000);
+		if (vol)
+			next_due(&due, audio_kick ? audio_kick : t_audio +
+			    (audio_watch ? 60000 : 3000));
+		if (vol && !audio_watch && bar.audio.mod && bar.audio.mod->watch_cmd)
+			next_due(&due, audio_watch_retry);
+		if (bar.bt_mod)
+			next_due(&due, t_bt + (bt_force ? 1500 : 8000));
+		next_due(&due, blocks_due());
+		next_due(&due, notify_due());
+		if (bar.fp && fp_busy())
+			next_due(&due, now + 250);
+		rui_wait(bar.app, due <= now ? 0 : (int)(due - now > 3600000 ?
+		    3600000 : due - now));
 	}
 	cal_close();
 	vol_close();

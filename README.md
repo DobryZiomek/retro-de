@@ -11,7 +11,7 @@
 ![Linux](https://img.shields.io/badge/Linux-any%20init-c03030?style=flat-square)
 ![BSD](https://img.shields.io/badge/Open%20%C2%B7%20Free%20%C2%B7%20NetBSD-supported-a08020?style=flat-square)
 ![Tests](https://img.shields.io/badge/tests-301%20checks-30a030?style=flat-square)
-![Version](https://img.shields.io/badge/version-1.2-6a4c93?style=flat-square)
+![Version](https://img.shields.io/badge/version-1.3-6a4c93?style=flat-square)
 
 <img src="docs/screenshots/cde.png" alt="retro-de with the CDE front panel and the About window" width="88%">
 
@@ -39,8 +39,18 @@ Everything else (D-Bus, XDG menus and autostart, audio servers, network
 daemons) is used **when present and ignored when not**. The same build runs
 under systemd, elogind, OpenRC, runit, s6, sysvinit, dinit or a BSD `rc`.
 
-It is about 28 000 lines of C11 that build without warnings under
+It is written in C11 and builds without warnings under
 `-std=c11 -Wall -Wextra -pedantic` with gcc and clang, with GNU or BSD make.
+
+**Light.** All programs are a single 0.5 MB executable (`retro`). The
+`retro-*` commands are links to it, so their code is on disk once and in
+memory once. A running session (window manager, panel, desktop, both buses)
+uses about 11 MB of memory in total. At rest nothing polls: the panel
+sleeps until its clock or a graph needs it, follows the volume through the
+mixer's own change events (`pactl subscribe`, `alsactl monitor`,
+`sndioctl -m`), and runs the network and Bluetooth tools only when the
+links change, or once a minute to be sure. That is about four short tool
+runs a minute instead of a hundred.
 
 ## Highlights
 
@@ -97,7 +107,7 @@ DISPLAY=:2 PATH="$PWD/bin:$PATH" RETRO_DE_DATA_DIR="$PWD" retro-session
 | `retro-session` | Starts and supervises the desktop; `exec` it from `~/.xinitrc` or pick "Retro" in a display manager |
 | `retro-wm` | Re-parenting window manager: Motif or Classic frames, EWMH/ICCCM, workspaces, float/tile/monocle layouts, Alt+Tab |
 | `retro-bar` | Windows-95 taskbar or CDE front panel: menus, pager, XEMBED tray, applets (CPU, RAM, battery, network, Bluetooth, volume, clock, custom blocks) |
-| `retro-desk` | Backdrop (colour, pattern, XPM/PPM wallpaper per monitor), desktop icons, workspace menu |
+| `retro-desk` | Backdrop (colour, pattern, PNG/SVG/XPM/PPM wallpaper per monitor), desktop icons, workspace menu |
 | `retro-programs` | The programs folder as a window of icons (`-l` lists it) |
 | `retro-bus` | The desktop's own message bus (instead of D-Bus); started by `retro-session` |
 | `retro-msg` | Talk to the bus from the shell: calls, events, notifications, script services |
@@ -165,8 +175,9 @@ Building needs the X11, Xft, Xinerama, Xrandr and Xext headers, `pkg-config` (wi
 fallbacks for `/usr/X11R6`, `/usr/X11R7`, `/usr/local`, `/usr/pkg`), and
 either GNU or BSD make. It builds without warnings under
 `-std=c11 -Wall -Wextra -pedantic` with gcc and clang. `make` also builds the
-theme modules in `themes/` and paints the wallpapers (`tools/mkwall`, at
-`WALL_W` x `WALL_H` from `config.mk`). Theme modules are loaded with
+theme modules in `themes/` and paints the wallpapers as compressed PNG
+(`tools/mkwall`, at `WALL_W` x `WALL_H` from `config.mk`; 1.8 MB for all
+six scenes). Theme modules are loaded with
 `dlopen(3)`, so the programs are linked with `-rdynamic` (and `-ldl` where
 libc lacks it); both are set in `config.mk`.
 
@@ -462,8 +473,8 @@ Every entry gets a picture; the first of these that exists wins:
 
 `# icon:` takes a pictogram name (`app terminal folder file editor
 computer display network browser calculator clock settings bluetooth game
-info programs`), an XPM/PPM path (absolute, `~/...` or relative to the
-folder) or a NAME found as `~/.config/retro-de/icons/NAME.xpm` (or `.ppm`)
+info programs`), an image path (PNG, SVG, XPM or PPM; absolute, `~/...` or relative to the
+folder) or a NAME found as `~/.config/retro-de/icons/NAME.png` (or `.svg`, `.xpm`, `.ppm`)
 or in `$(PREFIX)/share/retro-de/icons`. Without any of these a pictogram
 is chosen from the command (`@browser`, `firefox` -> globe, `retro-calc` ->
 calculator, ...). Pictures are plain files: no icon themes, no XDG
@@ -696,7 +707,8 @@ people you would run a program from.
 Twelve are painted at build time: the scenes Clouds, Dusk, Meadow, Night
 Sky, Setup and Waves, and the tiles Argyle, Bricks, Houndstooth, Rivets,
 Tiles and Weave. Pick one on the Backdrop page or with `wallpaper = Clouds`;
-your own XPM or PPM pictures go in `~/.config/retro-de/wallpapers`.
+your own PNG, SVG, XPM or PPM pictures go in `~/.config/retro-de/wallpapers`,
+or pick them with **Browse...** in `retro-wallpaper`.
 `wallpaper_mode` is `auto` (tile small pictures, fill with large ones),
 `fill`, `stretch`, `center` or `tile`; every monitor gets its own copy.
 
@@ -811,8 +823,8 @@ Questions or ideas? Open an issue, or find me on Discord: **cia_fed**.
 
 ## Limits
 
-- Only XPM and PPM images (no image libraries), so `.desktop` icons show
-  only when an XPM exists.
+- The SVG renderer skips text, filters, masks and clip paths; most icons
+  lose at most a detail.
 - One panel, on one monitor; no compositing.
 - Changing modes was tested against the RandR protocol on virtual servers,
   which have a single mode; the keep-or-revert countdown is there for

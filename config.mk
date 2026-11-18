@@ -1,6 +1,6 @@
 # retro-de build settings (included by the Makefile, dwm style).
 
-VERSION = 1.2
+VERSION = 1.3
 
 # install paths
 PREFIX  = /usr/local
@@ -30,8 +30,11 @@ XTST_LIBS = `$(PKGCONF) --libs xtst 2>/dev/null || echo "-lXtst"`
 # compiler
 CC      = cc
 AR      = ar
-CFLAGS  = -std=c11 -Wall -Wextra -pedantic -O2
-LDFLAGS =
+# Small by default: optimised for size, unused functions dropped, symbols
+# stripped (-s).  For debugging use -O0 -g and drop -s and --gc-sections.
+CFLAGS  = -std=c11 -Wall -Wextra -pedantic -Os -ffunction-sections \
+          -fdata-sections
+LDFLAGS = -Wl,--gc-sections -s
 
 # Theme modules are loaded with dlopen(3): the programs export their rui_*
 # functions to them (-rdynamic), and glibc before 2.34 keeps dlopen in

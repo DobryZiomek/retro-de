@@ -34,5 +34,6 @@ const RuiAudioModule rui_audio_pulseaudio = {
 	"pulseaudio", "pactl",
 	"pactl get-sink-volume @DEFAULT_SINK@ && pactl get-sink-mute @DEFAULT_SINK@",
 	"pactl set-sink-mute @DEFAULT_SINK@ toggle",
-	set_cmd, parse
+	set_cmd, parse,
+	"exec pactl subscribe"
 };

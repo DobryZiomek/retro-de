@@ -3,7 +3,7 @@
 %global debug_package %{nil}
 
 Name:           retro-de
-Version:        1.2
+Version:        1.3
 Release:        1
 Summary:        Small CDE / Windows 95 style desktop environment for X11
 License:        MIT
@@ -42,6 +42,7 @@ make install install-dbus PREFIX=%{_prefix} LIBDIR=%{_libdir}/retro-de \
 %files
 %license LICENSE
 %doc README.md
+%{_bindir}/retro
 %{_bindir}/retro-*
 %exclude %{_bindir}/retro-dbus
 %{_datadir}/retro-de

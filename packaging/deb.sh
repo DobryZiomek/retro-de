@@ -12,7 +12,7 @@ make -j"$(getconf _NPROCESSORS_ONLN)" PREFIX=/usr
 make install PREFIX=/usr DESTDIR="$R"
 D=$W/root-dbus
 make install-dbus PREFIX=/usr DESTDIR="$D"
-strip "$R"/usr/bin/* "$D"/usr/bin/*
+find "$R/usr/bin" "$D/usr/bin" -type f -exec strip {} +   # not the links
 strip --strip-unneeded "$R"/usr/lib/retro-de/themes/*.so
 mkdir -p "$R/usr/share/doc/retro-de"
 cp LICENSE "$R/usr/share/doc/retro-de/copyright"
@@ -20,7 +20,7 @@ cp README.md "$R/usr/share/doc/retro-de/"
 
 mkdir debian "$R/DEBIAN"
 echo "Source: retro-de" > debian/control
-DEPS=$(dpkg-shlibdeps -O "$R"/usr/bin/* | sed 's/^shlibs:Depends=//')
+DEPS=$(dpkg-shlibdeps -O "$R"/usr/bin/retro | sed 's/^shlibs:Depends=//')
 cat > "$R/DEBIAN/control" <<CTL
 Package: retro-de
 Version: $V-1
@@ -45,7 +45,7 @@ dpkg-deb --root-owner-group -Zxz --build "$R" \
 # the optional package: retro-dbus
 mkdir -p "$D/DEBIAN" "$D/usr/share/doc/retro-de-dbus"
 cp LICENSE "$D/usr/share/doc/retro-de-dbus/copyright"
-DDEPS=$(dpkg-shlibdeps -O "$D"/usr/bin/* | sed 's/^shlibs:Depends=//')
+DDEPS=$(dpkg-shlibdeps -O "$D"/usr/bin/retro-dbus | sed 's/^shlibs:Depends=//')
 cat > "$D/DEBIAN/control" <<CTL
 Package: retro-de-dbus
 Version: $V-1

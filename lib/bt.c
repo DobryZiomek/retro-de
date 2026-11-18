@@ -6,6 +6,8 @@
  */
 #include "retroui.h"
 
+#include <dirent.h>
+#include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <strings.h>
@@ -57,4 +59,51 @@ rui_bt_parse_devices(const RuiBtModule *m, const char *out, RuiBtDevice *list,
 	if (n > 1)
 		qsort(list, (size_t)n, sizeof *list, cmp_device);
 	return n;
+}
+
+/* Linux: a summary of /sys/class/bluetooth (controllers and, as hciN:M,
+ * open connections) and the Bluetooth rfkill switches.  Unchanged means
+ * the panel need not ask bluetoothctl again.  0 where there is no sysfs. */
+unsigned long
+rui_bt_fingerprint(void)
+{
+	unsigned long h = 5381;
+	struct dirent *de;
+	DIR *d = opendir("/sys/class/bluetooth");
+	const char *p;
+
+	if (!d)
+		return 0;
+	while ((de = readdir(d)))
+		for (p = de->d_name; *p; p++)
+			h = h * 33 + (unsigned char)*p;
+	closedir(d);
+	if ((d = opendir("/sys/class/rfkill"))) {
+		while ((de = readdir(d))) {
+			char path[300], buf[32] = "";
+			FILE *f;
+
+			if (de->d_name[0] == '.')
+				continue;
+			snprintf(path, sizeof path, "/sys/class/rfkill/%s/type",
+			    de->d_name);
+			if (!(f = fopen(path, "r")))
+				continue;
+			if (!fgets(buf, sizeof buf, f))
+				buf[0] = '\0';
+			fclose(f);
+			if (strncmp(buf, "bluetooth", 9))
+				continue;
+			snprintf(path, sizeof path, "/sys/class/rfkill/%s/state",
+			    de->d_name);
+			if ((f = fopen(path, "r"))) {
+				int c = fgetc(f);
+
+				h = h * 33 + (unsigned long)(c == EOF ? 0 : c);
+				fclose(f);
+			}
+		}
+		closedir(d);
+	}
+	return h ? h : 1;
 }

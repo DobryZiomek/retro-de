@@ -21,6 +21,8 @@ retro-wallpaper                                wallpaper chooser (CRT preview)
 retro-pkg                                      theme packages (.rtp)
 
             all of them link ──▶ libretroui.a   (lib/)
+            and are one executable, bin/retro (main/retro.c); the
+            retro-* names are links to it, chosen by argv[0]
 ```
 
 ## Source layout
@@ -54,6 +56,13 @@ retro-pkg                                      theme packages (.rtp)
   one binary can serve several init systems or audio stacks.
 - **Back ends shell out.** No module links a library; this keeps the build
   portable across Linux and the BSDs.
+- **Nothing polls at rest.** Programs sleep in `rui_wait()` until their
+  next deadline. Long-running monitors (`rui_watch_start`) replace
+  periodic commands where the system offers change events, and cheap
+  in-process checks (`rui_net_fingerprint`, `rui_bt_fingerprint`) decide
+  whether a tool needs to run at all.
+- **One executable.** A new program needs a `-Dmain=NAME_main` rule in the
+  Makefile, an entry in `main/retro.c` and its name in `NAMES`.
 - **Plain text configuration**, split into small files (`retro.conf`,
   `menu.conf`, `programs.conf`, `keys.conf`, `windows.conf`, `desktop.conf`).
 - **Portable C.** C11 / POSIX.1-2008, warning-free with

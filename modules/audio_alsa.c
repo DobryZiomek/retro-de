@@ -38,5 +38,6 @@ const RuiAudioModule rui_audio_alsa = {
 	"alsa", "amixer",
 	"amixer sget Master",
 	"amixer -q sset Master toggle",
-	set_cmd, parse
+	set_cmd, parse,
+	"command -v alsactl >/dev/null && exec alsactl monitor"
 };

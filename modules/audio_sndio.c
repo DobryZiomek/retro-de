@@ -28,5 +28,6 @@ const RuiAudioModule rui_audio_sndio = {
 	"sndio", "sndioctl",
 	"sndioctl -n output.level && sndioctl -n output.mute",
 	"sndioctl -q output.mute=!",
-	set_cmd, parse
+	set_cmd, parse,
+	"exec sndioctl -m"
 };

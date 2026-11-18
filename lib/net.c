@@ -10,6 +10,7 @@
 #include <sys/socket.h>
 #include <net/if.h>
 #include <ifaddrs.h>
+#include <netinet/in.h>
 
 const RuiNetModule *
 rui_net_detect(const char *forced)
@@ -159,4 +160,39 @@ rui_net_link_up(char *ifname, size_t n)
 	}
 	freeifaddrs(ifs);
 	return up;
+}
+
+/* A cheap summary of the links (names, up/running, addresses): when it has
+ * not changed, the network applet need not run its status command. */
+unsigned long
+rui_net_fingerprint(void)
+{
+	struct ifaddrs *ifs, *i;
+	unsigned long h = 5381;
+
+	if (getifaddrs(&ifs) < 0)
+		return 0;
+	for (i = ifs; i; i = i->ifa_next) {
+		const unsigned char *p;
+		size_t n = 0, k;
+
+		for (p = (const unsigned char *)i->ifa_name; *p; p++)
+			h = h * 33 + *p;
+		h = h * 33 + (unsigned long)(i->ifa_flags & (IFF_UP | IFF_RUNNING));
+		if (!i->ifa_addr)
+			continue;
+		if (i->ifa_addr->sa_family == AF_INET) {
+			p = (const unsigned char *)&((struct sockaddr_in *)
+			    (void *)i->ifa_addr)->sin_addr;
+			n = 4;
+		} else if (i->ifa_addr->sa_family == AF_INET6) {
+			p = (const unsigned char *)&((struct sockaddr_in6 *)
+			    (void *)i->ifa_addr)->sin6_addr;
+			n = 16;
+		}
+		for (k = 0; k < n; k++)
+			h = h * 33 + p[k];
+	}
+	freeifaddrs(ifs);
+	return h ? h : 1;
 }

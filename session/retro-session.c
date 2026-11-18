@@ -20,6 +20,7 @@
 #include "../lib/retroui.h"
 
 #include <errno.h>
+#include <fcntl.h>
 #include <limits.h>
 #include <signal.h>
 #include <stdio.h>
@@ -414,6 +415,8 @@ main(int argc, char **argv)
 		    XDisplayName(NULL));
 		return 1;
 	}
+	/* our own X connection must not live on in everything we start */
+	fcntl(ConnectionNumber(dpy), F_SETFD, FD_CLOEXEC);
 	bus_start();
 	dbus_start();
 	restore_monitors();

@@ -730,6 +730,19 @@ notify_event(XEvent *ev)
 	return 0;
 }
 
+/* when the next popup expires */
+long long
+notify_due(void)
+{
+	long long due = 0x7fffffffffffLL;
+	int i;
+
+	for (i = 0; i < nnotes; i++)
+		if (notes[i].expires && notes[i].expires < due)
+			due = notes[i].expires;
+	return due;
+}
+
 void
 notify_tick(long long now)
 {

@@ -3,11 +3,12 @@
  *
  *   mkwall <output-dir> [width height]
  *
- * retro-de reads only PPM and XPM, and neither compresses, so the pictures
- * are not shipped: this program paints them at build time.  Scenes come out
- * as binary PPM at the requested size (the desktop scales them per
- * monitor); patterns come out as small XPM tiles.  Everything is
- * deterministic - the same build gives the same files.
+ * The pictures are not shipped: this program paints them at build time.
+ * Scenes come out as PNG at the requested size (the desktop scales them
+ * per monitor), compressed by the small deflate encoder below (LZ77 with
+ * hash chains, fixed Huffman codes, a PNG filter chosen per row); patterns
+ * come out as small XPM tiles.  Everything is deterministic - the same
+ * build gives the same files.
  */
 #include <math.h>
 #include <stdio.h>
@@ -131,19 +132,278 @@ put(int x, int y, Rgb c)
 	p[2] = (unsigned char)(clamp01(c.b + d) * 255.0 + 0.5);
 }
 
-static int
-save_ppm(const char *dir, const char *name)
-{
-	char path[1024];
-	FILE *f;
+/* -------------------------------------------------------------- PNG out */
 
-	snprintf(path, sizeof path, "%s/%s.ppm", dir, name);
+typedef struct Bits {
+	unsigned char *p;
+	size_t len, cap;
+	unsigned long acc;
+	int n;
+} Bits;
+
+static void
+bits_put(Bits *b, unsigned long v, int n)          /* LSB first */
+{
+	b->acc |= v << b->n;
+	b->n += n;
+	while (b->n >= 8) {
+		if (b->len == b->cap) {
+			b->cap = b->cap ? b->cap * 2 : 65536;
+			b->p = realloc(b->p, b->cap);
+			if (!b->p) {
+				fprintf(stderr, "mkwall: out of memory\n");
+				exit(1);
+			}
+		}
+		b->p[b->len++] = (unsigned char)(b->acc & 255);
+		b->acc >>= 8;
+		b->n -= 8;
+	}
+}
+
+/* a Huffman code goes out most significant bit first */
+static void
+bits_code(Bits *b, unsigned code, int n)
+{
+	unsigned r = 0;
+	int i;
+
+	for (i = 0; i < n; i++)
+		r |= ((code >> i) & 1) << (n - 1 - i);
+	bits_put(b, r, n);
+}
+
+static void
+lit(Bits *b, int c)                                 /* fixed literal/length */
+{
+	if (c < 144)
+		bits_code(b, (unsigned)(0x30 + c), 8);
+	else if (c < 256)
+		bits_code(b, (unsigned)(0x190 + c - 144), 9);
+	else if (c < 280)
+		bits_code(b, (unsigned)(c - 256), 7);
+	else
+		bits_code(b, (unsigned)(0xc0 + c - 280), 8);
+}
+
+static const int lbase[29] = { 3, 4, 5, 6, 7, 8, 9, 10, 11, 13, 15, 17, 19,
+	23, 27, 31, 35, 43, 51, 59, 67, 83, 99, 115, 131, 163, 195, 227, 258 };
+static const int lext[29] = { 0, 0, 0, 0, 0, 0, 0, 0, 1, 1, 1, 1, 2, 2, 2, 2,
+	3, 3, 3, 3, 4, 4, 4, 4, 5, 5, 5, 5, 0 };
+static const int dbase[30] = { 1, 2, 3, 4, 5, 7, 9, 13, 17, 25, 33, 49, 65,
+	97, 129, 193, 257, 385, 513, 769, 1025, 1537, 2049, 3073, 4097, 6145,
+	8193, 12289, 16385, 24577 };
+static const int dext[30] = { 0, 0, 0, 0, 1, 1, 2, 2, 3, 3, 4, 4, 5, 5, 6, 6,
+	7, 7, 8, 8, 9, 9, 10, 10, 11, 11, 12, 12, 13, 13 };
+
+#define WIN 32768
+#define HBITS 15
+#define CHAIN 48
+
+/* raw deflate (one fixed-Huffman block) of d */
+static void
+deflate_fixed(Bits *b, const unsigned char *d, size_t n)
+{
+	int *head = malloc(sizeof(int) << HBITS), *prev = malloc(sizeof(int) * WIN);
+	size_t i = 0;
+
+	if (!head || !prev) {
+		fprintf(stderr, "mkwall: out of memory\n");
+		exit(1);
+	}
+	memset(head, 0xff, sizeof(int) << HBITS);
+	bits_put(b, 1, 1);                             /* last block */
+	bits_put(b, 1, 2);                             /* fixed codes */
+	while (i < n) {
+		int best = 0, dist = 0, chain = CHAIN, k;
+		long cand;
+		unsigned h = 0;
+
+		if (i + 2 < n) {
+			h = ((unsigned)d[i] << 10 ^ (unsigned)d[i + 1] << 5 ^ d[i + 2]) &
+			    ((1u << HBITS) - 1);
+			for (cand = head[h]; cand >= 0 && chain-- &&
+			    i - (size_t)cand <= WIN; cand = prev[cand % WIN]) {
+				size_t m = 0, max = n - i < 258 ? n - i : 258;
+
+				while (m < max && d[cand + m] == d[i + m])
+					m++;
+				if ((int)m > best) {
+					best = (int)m;
+					dist = (int)(i - (size_t)cand);
+					if (m == max)
+						break;
+				}
+			}
+		}
+		if (best >= 3) {
+			for (k = 0; k < 28 && lbase[k + 1] <= best; k++)
+				;
+			lit(b, 257 + k);
+			bits_put(b, (unsigned long)(best - lbase[k]), lext[k]);
+			for (k = 0; k < 29 && dbase[k + 1] <= dist; k++)
+				;
+			bits_code(b, (unsigned)k, 5);
+			bits_put(b, (unsigned long)(dist - dbase[k]), dext[k]);
+		} else {
+			lit(b, d[i]);
+			best = 1;
+		}
+		/* remember every position we pass */
+		for (k = 0; k < best; k++, i++) {
+			if (i + 2 < n) {
+				h = ((unsigned)d[i] << 10 ^ (unsigned)d[i + 1] << 5 ^ d[i + 2]) &
+				    ((1u << HBITS) - 1);
+				prev[i % WIN] = head[h];
+				head[h] = (int)i;
+			}
+		}
+	}
+	lit(b, 256);
+	if (b->n)
+		bits_put(b, 0, 8 - b->n);                  /* pad to a byte */
+	free(head);
+	free(prev);
+}
+
+static unsigned long
+crc32(unsigned long crc, const unsigned char *p, size_t n)
+{
+	static unsigned long t[256];
+	unsigned long c;
+	int i, k;
+
+	if (!t[1])
+		for (i = 0; i < 256; i++) {
+			for (c = (unsigned long)i, k = 0; k < 8; k++)
+				c = c & 1 ? 0xedb88320UL ^ (c >> 1) : c >> 1;
+			t[i] = c;
+		}
+	crc ^= 0xffffffffUL;
+	while (n--)
+		crc = t[(crc ^ *p++) & 255] ^ (crc >> 8);
+	return crc ^ 0xffffffffUL;
+}
+
+static void
+put32(FILE *f, unsigned long v)
+{
+	fputc((int)(v >> 24 & 255), f);
+	fputc((int)(v >> 16 & 255), f);
+	fputc((int)(v >> 8 & 255), f);
+	fputc((int)(v & 255), f);
+}
+
+static void
+chunk(FILE *f, const char *type, const unsigned char *d, size_t n)
+{
+	unsigned char *buf = malloc(n + 4);
+	unsigned long crc;
+
+	memcpy(buf, type, 4);
+	if (n)
+		memcpy(buf + 4, d, n);
+	crc = crc32(0, buf, n + 4);
+	put32(f, (unsigned long)n);
+	fwrite(buf, 1, n + 4, f);
+	put32(f, crc);
+	free(buf);
+}
+
+static int
+paeth(int a, int b, int c)
+{
+	int p = a + b - c, pa = abs(p - a), pb = abs(p - b), pc = abs(p - c);
+
+	return pa <= pb && pa <= pc ? a : pb <= pc ? b : c;
+}
+
+static int
+save_png(const char *dir, const char *name)
+{
+	size_t stride = (size_t)W * 3, n = (stride + 1) * (size_t)H, i;
+	unsigned char *raw = malloc(n), *row = malloc(stride), ihdr[13];
+	unsigned long a = 1, s = 0;
+	char path[1024];
+	Bits b;
+	FILE *f;
+	int y, ft, x;
+
+	if (!raw || !row) {
+		fprintf(stderr, "mkwall: out of memory\n");
+		exit(1);
+	}
+	/* each row with the filter that leaves the smallest residue */
+	for (y = 0; y < H; y++) {
+		const unsigned char *cur = px + (size_t)y * stride,
+		    *up = y ? cur - stride : NULL;
+		long best = -1;
+		int bestf = 0;
+
+		for (ft = 0; ft < 5; ft++) {
+			long sum = 0;
+
+			for (x = 0; x < (int)stride; x++) {
+				int l = x >= 3 ? cur[x - 3] : 0, u = up ? up[x] : 0,
+				    ul = up && x >= 3 ? up[x - 3] : 0, v;
+
+				v = ft == 0 ? cur[x] : ft == 1 ? cur[x] - l : ft == 2 ?
+				    cur[x] - u : ft == 3 ? cur[x] - (l + u) / 2 :
+				    cur[x] - paeth(l, u, ul);
+				v = (signed char)(unsigned char)v;
+				sum += abs(v);
+			}
+			if (best < 0 || sum < best) {
+				best = sum;
+				bestf = ft;
+			}
+		}
+		raw[(size_t)y * (stride + 1)] = (unsigned char)bestf;
+		for (x = 0; x < (int)stride; x++) {
+			int l = x >= 3 ? cur[x - 3] : 0, u = up ? up[x] : 0,
+			    ul = up && x >= 3 ? up[x - 3] : 0;
+
+			raw[(size_t)y * (stride + 1) + 1 + (size_t)x] = (unsigned char)(
+			    bestf == 0 ? cur[x] : bestf == 1 ? cur[x] - l : bestf == 2 ?
+			    cur[x] - u : bestf == 3 ? cur[x] - (l + u) / 2 :
+			    cur[x] - paeth(l, u, ul));
+		}
+	}
+	memset(&b, 0, sizeof b);
+	bits_put(&b, 0x78, 8);                         /* zlib header */
+	bits_put(&b, 0x01, 8);
+	deflate_fixed(&b, raw, n);
+	for (i = 0; i < n; i++) {                      /* adler-32 */
+		a = (a + raw[i]) % 65521;
+		s = (s + a) % 65521;
+	}
+	bits_put(&b, s >> 8 & 255, 8);
+	bits_put(&b, s & 255, 8);
+	bits_put(&b, a >> 8 & 255, 8);
+	bits_put(&b, a & 255, 8);
+	snprintf(path, sizeof path, "%s/%s.png", dir, name);
 	if (!(f = fopen(path, "wb"))) {
 		perror(path);
 		return -1;
 	}
-	fprintf(f, "P6\n%d %d\n255\n", W, H);
-	fwrite(px, 3, (size_t)W * (size_t)H, f);
+	fwrite("\x89PNG\r\n\x1a\n", 1, 8, f);
+	ihdr[0] = (unsigned char)(W >> 24);
+	ihdr[1] = (unsigned char)(W >> 16);
+	ihdr[2] = (unsigned char)(W >> 8);
+	ihdr[3] = (unsigned char)W;
+	ihdr[4] = (unsigned char)(H >> 24);
+	ihdr[5] = (unsigned char)(H >> 16);
+	ihdr[6] = (unsigned char)(H >> 8);
+	ihdr[7] = (unsigned char)H;
+	ihdr[8] = 8;                                   /* 8-bit RGB */
+	ihdr[9] = 2;
+	ihdr[10] = ihdr[11] = ihdr[12] = 0;
+	chunk(f, "IHDR", ihdr, 13);
+	chunk(f, "IDAT", b.p, b.len);
+	chunk(f, "IEND", NULL, 0);
+	free(b.p);
+	free(raw);
+	free(row);
 	return fclose(f);
 }
 
@@ -520,7 +780,7 @@ main(int argc, char **argv)
 	}
 	for (i = 0; i < sizeof scenes / sizeof scenes[0]; i++) {
 		scenes[i].draw();
-		if (save_ppm(argv[1], scenes[i].name) != 0)
+		if (save_png(argv[1], scenes[i].name) != 0)
 			rc = 1;
 	}
 	for (i = 0; i < sizeof tiles / sizeof tiles[0]; i++)

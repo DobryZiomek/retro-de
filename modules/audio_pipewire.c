@@ -28,5 +28,7 @@ const RuiAudioModule rui_audio_pipewire = {
 	"pipewire", "wpctl",
 	"wpctl get-volume @DEFAULT_AUDIO_SINK@",
 	"wpctl set-mute @DEFAULT_AUDIO_SINK@ toggle",
-	set_cmd, parse
+	set_cmd, parse,
+	/* pipewire-pulse reports changes; without pactl the panel polls */
+	"command -v pactl >/dev/null && exec pactl subscribe"
 };

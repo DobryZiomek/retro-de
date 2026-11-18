@@ -36,5 +36,6 @@ const RuiAudioModule rui_audio_oss = {
 	"oss", "mixer",
 	"mixer -o vol.volume vol.mute 2>/dev/null || mixer -s vol",
 	"mixer vol.mute=toggle >/dev/null 2>&1 || mixer vol.mute=^ >/dev/null 2>&1",
-	set_cmd, parse
+	set_cmd, parse,
+	NULL                               /* no change events: polled */
 };

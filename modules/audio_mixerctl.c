@@ -30,5 +30,6 @@ const RuiAudioModule rui_audio_mixerctl = {
 	"if [ \"$(mixerctl -n outputs.master.mute 2>/dev/null)\" = on ]; "
 	"then mixerctl -q -w outputs.master.mute=off; "
 	"else mixerctl -q -w outputs.master.mute=on; fi",
-	set_cmd, parse
+	set_cmd, parse,
+	NULL                               /* no change events: polled */
 };

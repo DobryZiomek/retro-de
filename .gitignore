@@ -11,6 +11,7 @@
 
 # generated at build time
 /config.h
+/wallpapers/*.png
 /wallpapers/*.ppm
 /wallpapers/*.xpm
 /wallpapers/.stamp

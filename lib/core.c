@@ -561,6 +561,7 @@ typedef struct Job {
 	size_t len, cap;
 	RuiJobFn fn;
 	void *ud;
+	int stream;                       /* rui_watch_start: line by line */
 } Job;
 
 static Job jobs[MAX_JOBS];
@@ -582,8 +583,43 @@ null_open(void)
 	}
 }
 
+static int job_spawn(const char *cmd, RuiJobFn fn, void *ud, int stream);
+
 int
 rui_job_start(const char *cmd, RuiJobFn fn, void *ud)
+{
+	return job_spawn(cmd, fn, ud, 0);
+}
+
+int
+rui_watch_start(const char *cmd, RuiJobFn fn, void *ud)
+{
+	int i;
+
+	if (job_spawn(cmd, fn, ud, 1) < 0)
+		return -1;
+	for (i = MAX_JOBS - 1; i >= 0; i--)
+		if (jobs[i].pid && jobs[i].stream && jobs[i].fn == fn &&
+		    jobs[i].ud == ud)
+			return (int)jobs[i].pid;
+	return -1;
+}
+
+void
+rui_watch_stop(int id)
+{
+	int i;
+
+	for (i = 0; i < MAX_JOBS; i++) {
+		if (jobs[i].pid != (pid_t)id || !jobs[i].stream || id <= 0)
+			continue;
+		kill(-jobs[i].pid, SIGTERM);       /* its own process group */
+		jobs[i].fn = NULL;                 /* no callback for this end */
+	}
+}
+
+static int
+job_spawn(const char *cmd, RuiJobFn fn, void *ud, int stream)
 {
 	int i, p[2];
 	pid_t pid;
@@ -625,6 +661,7 @@ rui_job_start(const char *cmd, RuiJobFn fn, void *ud)
 	jobs[i].out[0] = '\0';
 	jobs[i].fn = fn;
 	jobs[i].ud = ud;
+	jobs[i].stream = stream;
 	return 0;
 }
 
@@ -650,8 +687,8 @@ job_finish(Job *j)
 		;
 	memset(j, 0, sizeof *j);          /* slot is free before the callback */
 	if (done.fn)
-		done.fn(done.out, WIFEXITED(status) ? WEXITSTATUS(status) : -1,
-		    done.ud);
+		done.fn(done.stream ? NULL : done.out, WIFEXITED(status) ?
+		    WEXITSTATUS(status) : -1, done.ud);
 	free(done.out);
 }
 
@@ -673,6 +710,21 @@ job_read(Job *j)
 				memcpy(j->out + j->len, buf, (size_t)r);
 				j->len += (size_t)r;
 				j->out[j->len] = '\0';
+			} else if (j->stream) {
+				j->len = 0;               /* a runaway line: drop it */
+			}
+			if (j->stream) {              /* hand over complete lines */
+				char *nl;
+
+				while (j->pid && (nl = memchr(j->out, '\n', j->len))) {
+					size_t n = (size_t)(nl - j->out) + 1;
+
+					*nl = '\0';
+					if (j->fn)
+						j->fn(j->out, 0, j->ud);
+					memmove(j->out, j->out + n, j->len - n + 1);
+					j->len -= n;
+				}
 			}
 			continue;
 		}
@@ -693,7 +745,7 @@ rui_jobs_shutdown(void)
 	for (i = 0; i < MAX_JOBS; i++) {
 		if (!jobs[i].pid)
 			continue;
-		kill(jobs[i].pid, SIGTERM);
+		kill(jobs[i].stream ? -jobs[i].pid : jobs[i].pid, SIGTERM);
 		close(jobs[i].fd);
 		while (waitpid(jobs[i].pid, NULL, 0) < 0 && errno == EINTR)
 			;
