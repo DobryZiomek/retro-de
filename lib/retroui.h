@@ -52,6 +52,10 @@ char  *rui_strdupf(const char *fmt, ...);      /* malloc'd printf             */
 int    rui_next_line(const char **p, char *buf, size_t n);  /* 0 at the end   */
 char  *rui_ltrim(char *s);
 char  *rui_rtrim(char *s);
+/* the full name from a passwd GECOS field: text before the first comma, with
+ * BSD's '&' standing for the login name, capitalised; "" when there is none */
+void   rui_gecos_name(const char *gecos, const char *login, char *buf,
+                      size_t n);
 /* first decimal number in s (may be fractional); pointer past it or NULL */
 const char *rui_first_number(const char *s, double *val);
 
@@ -331,6 +335,9 @@ void rui_bevel_c(RuiSurf *s, int x, int y, int w, int h, int raised,
                  int light, int shadow, int thick);
 void rui_text(RuiSurf *s, RuiFont *f, int x, int y, const char *str, int len,
               int color);
+/* the same in any colour, e.g. a preview palette's */
+void rui_text_c(RuiSurf *s, RuiFont *f, int x, int y, const char *str, int len,
+                const XftColor *c);
 /* draws at most maxw pixels, eliding with "..."; returns drawn width */
 int  rui_text_fit(RuiSurf *s, RuiFont *f, RuiRect r, const char *str,
                   int color, int align);

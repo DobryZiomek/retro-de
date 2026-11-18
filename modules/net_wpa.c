@@ -50,7 +50,8 @@ parse_scan(const char *out, RuiNetwork *list, int max)
 
 	while (rui_next_line(&p, line, sizeof line)) {
 		char *f[5], *s = line;
-		int i, dbm, pct;
+		int i, pct;
+		long dbm;
 
 		for (i = 0; i < 5; i++) {
 			f[i] = s;
@@ -63,10 +64,14 @@ parse_scan(const char *out, RuiNetwork *list, int max)
 		}
 		if (i < 5 || !strchr(f[0], ':'))
 			continue;
-		dbm = atoi(f[2]);
-		pct = dbm < 0 ? 2 * (dbm + 100) : dbm;
-		if (pct < 0)
-			pct = 0;
+		/* dBm (negative) or already a percentage; clamp before the
+		 * arithmetic so a nonsense value cannot overflow */
+		dbm = strtol(f[2], NULL, 10);
+		if (dbm < -100)
+			dbm = -100;
+		if (dbm > 100)
+			dbm = 100;
+		pct = dbm < 0 ? 2 * ((int)dbm + 100) : (int)dbm;
 		if (pct > 100)
 			pct = 100;
 		rui_net_add(list, &n, max, rui_rtrim(f[4]), pct,

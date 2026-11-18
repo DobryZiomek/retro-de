@@ -53,6 +53,18 @@ test_util(const char *dir)
 	rui_strlcpy(buf, "\033[1;90mgrey\033[0m plain", sizeof buf);
 	rui_strip_ansi(buf);
 	CHECK(!strcmp(buf, "grey plain"), "ANSI escapes are stripped");
+	{
+		char g1[64], g2[64], g3[64], g4[64], g5[8];
+
+		rui_gecos_name("Jan Kowalski,,,", "jan", g1, sizeof g1);
+		rui_gecos_name("Charlie &", "root", g2, sizeof g2);
+		rui_gecos_name(",,,", "x", g3, sizeof g3);
+		rui_gecos_name(NULL, "x", g4, sizeof g4);
+		rui_gecos_name("& the &s", "abcdefgh", g5, sizeof g5);
+		CHECK(!strcmp(g1, "Jan Kowalski") && !strcmp(g2, "Charlie Root") &&
+		    !g3[0] && !g4[0] && !strcmp(g5, "Abcdefg"),
+		    "GECOS full name: comma fields dropped, '&' is the login");
+	}
 	CHECK(rui_have_cmd("sh") && !rui_have_cmd("no-such-command-xyz"),
 	    "PATH lookup");
 	CHECK(rui_strlcpy(buf, "0123456789", 5) == 10 && !strcmp(buf, "0123"),
@@ -225,6 +237,12 @@ test_net(void)
 	    nets[0].signal == 100 && !strcmp(nets[1].ssid, "Guest Net") &&
 	    !nets[1].secure && nets[1].signal == 40,
 	    "wpa_cli: scan results merged per SSID and sorted");
+	n = rui_net_parse_scan(&rui_net_wpa,
+	    "aa:bb:cc:dd:ee:01\t2412\t-99999999999\t[WPA2]\tLow\n"
+	    "aa:bb:cc:dd:ee:02\t2412\t99999999999\t[ESS]\tHigh\n", nets, 8);
+	CHECK(n == 2 && !strcmp(nets[0].ssid, "High") && nets[0].signal == 100 &&
+	    !strcmp(nets[1].ssid, "Low") && nets[1].signal == 0,
+	    "wpa_cli: absurd signal values are clamped, not overflowed");
 	CHECK(rui_net_parse_status(&rui_net_wpa, wpa_status, &st) &&
 	    st.connected && !strcmp(st.ssid, "Office"), "wpa_cli: status");
 	CHECK(rui_net_parse_iface(&rui_net_ifconfig, ifc, iface, sizeof iface) &&
@@ -257,6 +275,9 @@ test_sys(void)
 	    "apm output: 85%% on AC");
 	CHECK(!rui_battery_apm.parse("255\n255\n", &pct, &chg),
 	    "apm 'no battery' value is rejected");
+	CHECK(!rui_battery_apm.parse("0\n255\n4\n", &pct, &chg) &&
+	    rui_battery_apm.parse("40\n0\n1\n", &pct, &chg) && pct == 40 &&
+	    chg == 0, "apm: OpenBSD's 0%% with state 'absent' is no battery");
 #if defined(__linux__) || defined(__OpenBSD__) || defined(__FreeBSD__) || \
     defined(__NetBSD__)
 	CHECK(rui_sys_cpu(&busy) && busy >= 0.0 && busy <= 1.0, "CPU probe works");
@@ -1145,6 +1166,15 @@ test_calc(void)
 	    calc_is(&st, "npr(5, 2)", "20") && calc_is(&st, "gcd(12, 18)", "6") &&
 	    calc_is(&st, "lcm(4, 6)", "12") && calc_is(&st, "max(2, min(9, 5))", "5"),
 	    "factorials and combinatorics");
+	CHECK(calc_is(&st, "ncr(1000, 500)", "2.70288240945e+299") &&
+	    calc_is(&st, "ncr(1100, 550)", "error: too large (overflow)") &&
+	    calc_is(&st, "ncr(1e15, 5e14)", "error: too large (overflow)") &&
+	    calc_is(&st, "ncr(1e300, 1e299)", "error: too large (overflow)") &&
+	    calc_is(&st, "ncr(1e15, 2)", "5e+29") &&
+	    calc_is(&st, "npr(57!, 55!)", "error: too large") &&
+	    calc_is(&st, "ncr(2e499, 5e1405)", "error: too large") &&
+	    calc_is(&st, "ncr(1e400, 3)", "error: too large"),
+	    "huge ncr/npr give up quickly instead of hanging");
 	CHECK(calc_is(&st, "0xff", "255") && calc_is(&st, "0b1010", "10") &&
 	    calc_is(&st, "0o17", "15") && calc_is(&st, "0xff & 0b1010", "10") &&
 	    calc_is(&st, "1 << 10", "1024") && calc_is(&st, "1024 >> 3", "128") &&

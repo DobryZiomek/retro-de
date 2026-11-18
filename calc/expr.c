@@ -128,11 +128,18 @@ ncr(Parser *ps, double n, double r)
 		fail(ps, "ncr needs whole numbers >= 0");
 		return 0;
 	}
+	if (!isfinite(n) || !isfinite(r)) {
+		fail(ps, "too large");
+		return 0;
+	}
 	if (r > n)
 		return 0;
 	if (r > n - r)
 		r = n - r;
-	for (k = 1; k <= r; k++)
+	/* v only grows (r <= n/2), so it is infinite within ~520 rounds when the
+	 * answer is too large: stop there instead of counting to r, which never
+	 * ends once r passes 2^53 (k++ stops changing k) */
+	for (k = 1; k <= r && isfinite(v); k++)
 		v = v * (n - r + k) / k;
 	return floor(v + 0.5);
 }

@@ -111,7 +111,13 @@ cpu_model(char *buf, size_t n)
 	if (sysctl(mib, 2, buf, &len, NULL, 0) < 0 || !buf[0])
 		return 0;
 	buf[n - 1] = '\0';
-	return 1;
+	/* FreeBSD pads hw.model with blanks */
+	{
+		char *s = rui_ltrim(rui_rtrim(buf));
+
+		memmove(buf, s, strlen(s) + 1);
+	}
+	return buf[0] != '\0';
 #else
 	(void)buf;
 	(void)n;
@@ -158,12 +164,15 @@ collect(Display *dpy)
 		add("Computer name", "%s", host);
 	}
 	pwd = getpwuid(getuid());
-	if (pwd && pwd->pw_name)
-		add("User", "%s%s%s%s", pwd->pw_name, pwd->pw_gecos &&
-		    pwd->pw_gecos[0] && pwd->pw_gecos[0] != ',' ? " (" : "",
-		    pwd->pw_gecos && pwd->pw_gecos[0] != ',' ? pwd->pw_gecos : "",
-		    pwd->pw_gecos && pwd->pw_gecos[0] && pwd->pw_gecos[0] != ',' ?
-		    ")" : "");
+	if (pwd && pwd->pw_name) {
+		char full[128];
+
+		rui_gecos_name(pwd->pw_gecos, pwd->pw_name, full, sizeof full);
+		if (full[0])
+			add("User", "%s (%s)", pwd->pw_name, full);
+		else
+			add("User", "%s", pwd->pw_name);
+	}
 	if (uname(&u) == 0) {
 		add("System", "%s %s", u.sysname, u.release);
 		add("Machine", "%s", u.machine);

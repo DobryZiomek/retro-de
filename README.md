@@ -10,7 +10,7 @@
 ![X11](https://img.shields.io/badge/X11-Xlib%20%2B%20Xft-3a6ea5?style=flat-square)
 ![Linux](https://img.shields.io/badge/Linux-any%20init-c03030?style=flat-square)
 ![BSD](https://img.shields.io/badge/Open%20%C2%B7%20Free%20%C2%B7%20NetBSD-supported-a08020?style=flat-square)
-![Tests](https://img.shields.io/badge/tests-253%20checks-30a030?style=flat-square)
+![Tests](https://img.shields.io/badge/tests-257%20checks-30a030?style=flat-square)
 ![Version](https://img.shields.io/badge/version-1.2-6a4c93?style=flat-square)
 
 <img src="docs/screenshots/cde.png" alt="retro-de with the CDE front panel and the About window" width="88%">

@@ -171,6 +171,28 @@ rui_have_cmd(const char *name)
 	return 0;
 }
 
+void
+rui_gecos_name(const char *gecos, const char *login, char *buf, size_t n)
+{
+	size_t o = 0;
+
+	if (!n)
+		return;
+	for (; gecos && *gecos && *gecos != ','; gecos++) {
+		if (*gecos == '&' && login) {
+			const char *l;
+
+			for (l = login; *l && o + 1 < n; l++)
+				buf[o++] = l == login ?
+				    (char)toupper((unsigned char)*l) : *l;
+		} else if (o + 1 < n) {
+			buf[o++] = *gecos;
+		}
+	}
+	buf[o] = '\0';
+	rui_rtrim(buf);
+}
+
 char *
 rui_shell_quote(const char *s)
 {
@@ -542,6 +564,23 @@ typedef struct Job {
 } Job;
 
 static Job jobs[MAX_JOBS];
+/* /dev/null for the jobs' stdin and stderr, opened before the programs
+ * pledge(2): a child that opened it for writing itself would be killed in
+ * a program without "wpath" (retro-net, retro-bt, retro-wm, the session) */
+static int null_fd = -1;
+
+static void
+null_open(void)
+{
+	int fd;
+
+	/* kept above 2, so a program started with stdin closed still gives
+	 * its children a real stdin rather than this close-on-exec copy */
+	if (null_fd < 0 && (fd = open("/dev/null", O_RDWR)) >= 0) {
+		null_fd = fcntl(fd, F_DUPFD_CLOEXEC, 3);
+		close(fd);
+	}
+}
 
 int
 rui_job_start(const char *cmd, RuiJobFn fn, void *ud)
@@ -554,6 +593,7 @@ rui_job_start(const char *cmd, RuiJobFn fn, void *ud)
 			break;
 	if (i == MAX_JOBS)
 		return -1;
+	null_open();                        /* no-op after rui_open() */
 	if (pipe(p) < 0)
 		return -1;
 	pid = fork();
@@ -563,16 +603,12 @@ rui_job_start(const char *cmd, RuiJobFn fn, void *ud)
 		return -1;
 	}
 	if (pid == 0) {
-		int devnull = open("/dev/null", O_RDWR);
-
 		setsid();
 		signal(SIGPIPE, SIG_DFL);
 		dup2(p[1], 1);
-		if (devnull >= 0) {
-			dup2(devnull, 0);
-			dup2(devnull, 2);
-			if (devnull > 2)
-				close(devnull);
+		if (null_fd >= 0) {
+			dup2(null_fd, 0);
+			dup2(null_fd, 2);
 		}
 		close(p[0]);
 		close(p[1]);
@@ -817,6 +853,7 @@ rui_open(const char *name)
 
 	prog_name = name;
 	app->name = name;
+	null_open();
 	setlocale(LC_CTYPE, "");
 	setlocale(LC_TIME, "");
 	if ((dbg = getenv("RETRO_DEBUG")) && *dbg && strcmp(dbg, "0"))
@@ -1578,9 +1615,54 @@ rui_bevel(RuiSurf *s, int x, int y, int w, int h, int style)
 	}
 }
 
+/* Xft blends glyphs into the back buffer with RENDER, and on a PseudoColor
+ * (8-bit, palette) screen the server's indexed pictures turn every glyph box
+ * into a solid block.  There the text goes through a 1-bit mask instead:
+ * same font, no antialiasing, no blending.  Honours a clip set on app->gc. */
+static void
+text_through_mask(RuiSurf *s, RuiFont *f, int x, int y, const char *str,
+    int len, unsigned long pixel)
+{
+	RuiApp *a = s->app;
+	XGlyphInfo gi;
+	XftColor one;
+	XftDraw *md;
+	Pixmap m;
+	GC mg;
+	int ox, w, h = f->height + 2;
+
+	XftTextExtentsUtf8(a->dpy, f->xft, (const FcChar8 *)str, len, &gi);
+	ox = gi.x > 0 ? gi.x : 0;               /* ink left of the origin */
+	w = ox + (gi.width - gi.x > gi.xOff ? gi.width - gi.x : gi.xOff) + 2;
+	if (w <= 0)
+		return;
+	m = XCreatePixmap(a->dpy, s->buf, (unsigned)w, (unsigned)h, 1);
+	mg = XCreateGC(a->dpy, m, 0, NULL);
+	XSetForeground(a->dpy, mg, 0);
+	XFillRectangle(a->dpy, m, mg, 0, 0, (unsigned)w, (unsigned)h);
+	memset(&one, 0, sizeof one);
+	one.pixel = 1;
+	one.color.alpha = 0xffff;
+	if ((md = XftDrawCreateBitmap(a->dpy, m))) {
+		XftDrawStringUtf8(md, &one, f->xft, ox, 1 + f->ascent,
+		    (const FcChar8 *)str, len);
+		XftDrawDestroy(md);
+	}
+	XSetForeground(a->dpy, a->gc, pixel);
+	XSetStipple(a->dpy, a->gc, m);
+	XSetTSOrigin(a->dpy, a->gc, x - ox, y - 1);
+	XSetFillStyle(a->dpy, a->gc, FillStippled);
+	XFillRectangle(a->dpy, s->buf, a->gc, x - ox, y - 1, (unsigned)w,
+	    (unsigned)h);
+	XSetFillStyle(a->dpy, a->gc, FillSolid);
+	XSetTSOrigin(a->dpy, a->gc, 0, 0);
+	XFreeGC(a->dpy, mg);
+	XFreePixmap(a->dpy, m);
+}
+
 void
-rui_text(RuiSurf *s, RuiFont *f, int x, int y, const char *str, int len,
-    int color)
+rui_text_c(RuiSurf *s, RuiFont *f, int x, int y, const char *str, int len,
+    const XftColor *c)
 {
 	RuiApp *a = s->app;
 
@@ -1588,14 +1670,24 @@ rui_text(RuiSurf *s, RuiFont *f, int x, int y, const char *str, int len,
 		len = (int)strlen(str);
 	if (len == 0)
 		return;
-	if (f->xft) {
-		XftDrawStringUtf8(s->xd, &a->color[color], f->xft, x, y + f->ascent,
+	if (f->xft && (a->vis->class == TrueColor ||
+	    a->vis->class == DirectColor)) {
+		XftDrawStringUtf8(s->xd, c, f->xft, x, y + f->ascent,
 		    (const FcChar8 *)str, len);
+	} else if (f->xft) {
+		text_through_mask(s, f, x, y, str, len, c->pixel);
 	} else {
-		XSetForeground(a->dpy, a->gc, a->color[color].pixel);
+		XSetForeground(a->dpy, a->gc, c->pixel);
 		Xutf8DrawString(a->dpy, s->buf, f->set, a->gc, x, y + f->ascent, str,
 		    len);
 	}
+}
+
+void
+rui_text(RuiSurf *s, RuiFont *f, int x, int y, const char *str, int len,
+    int color)
+{
+	rui_text_c(s, f, x, y, str, len, &s->app->color[color]);
 }
 
 int

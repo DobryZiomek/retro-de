@@ -176,8 +176,10 @@ go_up(void)
 	slash = strrchr(parent, '/');
 	if (slash && slash > parent)
 		*slash = '\0';
-	if (strlen(parent) < strlen(pm.root))  /* never above the folder */
-		strcpy(parent, pm.root);
+	if (strlen(parent) < strlen(pm.root)) { /* never above the folder */
+		free(parent);
+		parent = rui_strdup(pm.root);
+	}
 	go_to(parent, from);
 	free(parent);
 	free(from);

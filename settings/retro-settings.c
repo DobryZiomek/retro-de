@@ -252,9 +252,7 @@ ptext(int x, int y, const char *t, int c)
 {
 	RuiFont *f = st.app->bold;
 
-	if (f->xft)
-		XftDrawStringUtf8(st.s->xd, &st.pv[c], f->xft, x, y + f->ascent,
-		    (const FcChar8 *)t, (int)strlen(t));
+	rui_text_c(st.s, f, x, y, t, -1, &st.pv[c]);
 }
 
 static void

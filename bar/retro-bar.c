@@ -634,7 +634,7 @@ static void
 layout(void)
 {
 	RuiApp *a = bar.app;
-	int x, right, i, n = 0, tw, pw = bar.h - 6, isz = bar.h - 8;
+	int x, right, i, n = 0, tw, pw = bar.h - 6, isz = bar.h - 8, full = 0;
 	char buf[160];
 
 	bar.r_start.x = 2;
@@ -663,6 +663,8 @@ layout(void)
 		int w = 0;
 
 		ap->r.w = 0;
+		if (full)
+			continue;                  /* no room left: hidden */
 		if (ap->kind == AP_CPU) {
 			w = bar.have_cpu ? CPU_HIST + 4 : 0;
 		} else if (ap->kind == AP_MEM) {
@@ -679,6 +681,13 @@ layout(void)
 		}
 		if (w == 0)
 			continue;
+		if (right - w < x) {
+			/* a narrow screen: keep the applets on the right (the clock)
+			 * and drop this one and those left of it rather than draw
+			 * them over the Start button */
+			full = 1;
+			continue;
+		}
 		right -= w;
 		ap->r.x = right;
 		ap->r.y = 3;
@@ -1698,8 +1707,9 @@ main(int argc, char **argv)
 	bar.app = rui_open("retro-bar");
 	setup();
 #ifdef __OpenBSD__
-	/* wpath cpath: the programs folder is created on first use */
-	if (pledge("stdio rpath wpath cpath proc exec vminfo", NULL) == -1)
+	/* wpath cpath: the programs folder is created on first use;
+	 * route: getifaddrs(3) for the network applet's link state */
+	if (pledge("stdio rpath wpath cpath proc exec vminfo route", NULL) == -1)
 		rui_die("pledge failed");
 #endif
 	bar.running = 1;

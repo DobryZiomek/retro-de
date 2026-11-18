@@ -561,7 +561,8 @@ main(int argc, char **argv)
 #ifdef __OpenBSD__
 	if (unveil("/", "rx") == -1 || unveil(NULL, NULL) == -1)
 		rui_die("unveil failed");
-	if (pledge("stdio rpath proc exec", NULL) == -1)
+	/* route: getifaddrs(3) finds the wired link */
+	if (pledge("stdio rpath proc exec route", NULL) == -1)
 		rui_die("pledge failed");
 #endif
 	kick_off();

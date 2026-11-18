@@ -405,8 +405,16 @@ if [ -n "$WS_SET" ]; then WS=$WS_SET; else
 	input "Workspaces" "Number of workspaces (1-32)" 4
 	WS=$REPLY
 fi
-case $WS in ''|*[!0-9]*) WS=4 ;; esac
-[ "$WS" -ge 1 ] && [ "$WS" -le 32 ] || WS=4
+ws_ok=1
+case $WS in ''|*[!0-9]*) ws_ok= ;; *) [ "$WS" -ge 1 ] && [ "$WS" -le 32 ] || ws_ok= ;; esac
+if [ -z "$ws_ok" ]; then
+	if [ -n "$WS_SET" ]; then
+		echo "configure: --workspaces must be a number from 1 to 32" >&2
+		exit 2
+	fi
+	echo "configure: '$WS' is not 1-32 workspaces, using 4" >&2
+	WS=4
+fi
 
 cur_prefix=$(sed -n 's/^PREFIX *= *//p' config.mk)
 if [ -n "$PREFIX_SET" ]; then PREFIX=$PREFIX_SET; else

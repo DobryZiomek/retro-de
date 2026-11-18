@@ -193,8 +193,10 @@ complete(void)
 
 		memcpy(buf, run.matches[0], common);
 		buf[common] = '\0';
-		if (run.nmatches == 1)
-			strcat(buf, " ");
+		if (run.nmatches == 1) {            /* room: common < MAX - 2 */
+			buf[common] = ' ';
+			buf[common + 1] = '\0';
+		}
 		rui_input_set(&run.input, buf);
 	} else if (run.nmatches == 1) {
 		char buf[RUI_INPUT_MAX];

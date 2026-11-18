@@ -140,10 +140,12 @@ parse_scan(const char *out, RuiNetwork *list, int max)
 			continue;                      /* the interface's own line */
 		if ((pc = strchr(rest, '%'))) {
 			const char *b = pc;
+			long v;
 
 			while (b > rest && isdigit((unsigned char)b[-1]))
 				b--;
-			pct = atoi(b);
+			v = strtol(b, NULL, 10);         /* digits only: >= 0 */
+			pct = v > 100 ? 100 : (int)v;
 		}
 		rui_net_add(list, &n, max, ssid, pct,
 		    strstr(rest, "privacy") || strstr(rest, "wpa"), 0);

@@ -2555,6 +2555,23 @@ place(Client *c)
 		}
 	}
 	a = area_of(c);
+	/* a window larger than the monitor (a 640x480 or smaller screen) is
+	 * shrunk to fit, as far as its minimum size allows */
+	if (frame_w(c) > a.w || frame_h(c) > a.h) {
+		int w = c->w, h = c->h;
+
+		if (frame_w(c) > a.w)
+			w -= frame_w(c) - a.w;
+		if (frame_h(c) > a.h)
+			h -= frame_h(c) - a.h;
+		apply_size_hints(c, &w, &h);
+		c->w = w;
+		c->h = h;
+	}
+	if (c->x + frame_w(c) > a.x + a.w)
+		c->x = a.x + a.w - frame_w(c);
+	if (c->y + frame_h(c) > a.y + a.h)
+		c->y = a.y + a.h - frame_h(c);
 	if (c->x < a.x)
 		c->x = a.x;
 	if (c->y < a.y)

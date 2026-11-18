@@ -1171,7 +1171,7 @@ type_ahead(const char *ch)
 	fm.type_time = now;
 	len = strlen(fm.typed);
 	if (len + strlen(ch) + 1 < sizeof fm.typed)
-		strcat(fm.typed, ch);
+		rui_strlcpy(fm.typed + len, ch, sizeof fm.typed - len);
 	len = strlen(fm.typed);
 	for (i = 0; i < fm.n; i++) {
 		if (!strncasecmp(fm.ents[i].name, fm.typed, len)) {
